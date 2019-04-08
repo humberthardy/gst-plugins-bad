@@ -4990,7 +4990,7 @@ gst_webrtc_bin_class_init (GstWebRTCBinClass * klass)
           "Maximum port for local rtp port range. "
           "If both max-rtp-port and min-rtp-port are 0, a random port is "
           "chosen. max-rtp-port must be >= min-rtp-port",
-          0, 65535, 0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+          0, 65535, 65535, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject_class,
       PROP_MIN_RTCP_PORT,
@@ -5007,7 +5007,7 @@ gst_webrtc_bin_class_init (GstWebRTCBinClass * klass)
           "Maximum port for local rtcp port range. "
           "If both max-rtcp-port and min-rtcp-port are 0, a random port is "
           "chosen. max-rtcp-port must be >= min-rtcp-port",
-          0, 65535, 0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+          0, 65535, 65535, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
    * GstWebRTCBin::create-offer:
