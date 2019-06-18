@@ -33,7 +33,7 @@
 //#include <gst/video/videooverlay.h>
 
 #include "vksink.h"
-#include "vkdevice.h"
+#include "vkswapper.h"
 
 GST_DEBUG_CATEGORY (gst_debug_vulkan_sink);
 #define GST_CAT_DEFAULT gst_debug_vulkan_sink
@@ -65,11 +65,18 @@ static GstFlowReturn gst_vulkan_sink_prepare (GstBaseSink * bsink,
 static GstFlowReturn gst_vulkan_sink_show_frame (GstVideoSink * bsink,
     GstBuffer * buf);
 
+static void gst_vulkan_sink_video_overlay_init (GstVideoOverlayInterface *
+    iface);
+
+
 static GstStaticPadTemplate gst_vulkan_sink_template =
-GST_STATIC_PAD_TEMPLATE ("sink",
+    GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
+        (GST_CAPS_FEATURE_MEMORY_VULKAN_IMAGE,
+            GST_VULKAN_SWAPPER_VIDEO_FORMATS) ";"
+        GST_VIDEO_CAPS_MAKE_WITH_FEATURES
         (GST_CAPS_FEATURE_MEMORY_VULKAN_BUFFER,
             GST_VULKAN_SWAPPER_VIDEO_FORMATS)));
 
@@ -91,7 +98,9 @@ enum
 #define gst_vulkan_sink_parent_class parent_class
 G_DEFINE_TYPE_WITH_CODE (GstVulkanSink, gst_vulkan_sink,
     GST_TYPE_VIDEO_SINK, GST_DEBUG_CATEGORY_INIT (gst_debug_vulkan_sink,
-        "vulkansink", 0, "Vulkan Video Sink"));
+        "vulkansink", 0, "Vulkan Video Sink");
+    G_IMPLEMENT_INTERFACE (GST_TYPE_VIDEO_OVERLAY,
+        gst_vulkan_sink_video_overlay_init));
 
 static void
 gst_vulkan_sink_class_init (GstVulkanSinkClass * klass)
@@ -212,6 +221,9 @@ gst_vulkan_sink_query (GstBaseSink * bsink, GstQuery * query)
       if (gst_vulkan_handle_context_query (GST_ELEMENT (vk_sink), query,
               &vk_sink->display, &vk_sink->instance, &vk_sink->device))
         return TRUE;
+      if (gst_vulkan_queue_handle_context_query (GST_ELEMENT (vk_sink), query,
+              &vk_sink->swapper->queue))
+        return TRUE;
 
       break;
     }
@@ -261,12 +273,20 @@ gst_vulkan_sink_change_state (GstElement * element, GstStateChange transition)
         return GST_STATE_CHANGE_FAILURE;
       }
 
+      /* FIXME: this probably doesn't need to be so early in the setup process */
       if (!(vk_sink->window =
               gst_vulkan_display_create_window (vk_sink->display))) {
         GST_ELEMENT_ERROR (vk_sink, RESOURCE, NOT_FOUND,
             ("Failed to create a window"), (NULL));
         return GST_STATE_CHANGE_FAILURE;
       }
+
+      if (!vk_sink->set_window_handle)
+        gst_video_overlay_prepare_window_handle (GST_VIDEO_OVERLAY (vk_sink));
+
+      if (vk_sink->set_window_handle)
+        gst_vulkan_window_set_window_handle (vk_sink->window,
+            vk_sink->set_window_handle);
 
       if (!gst_vulkan_window_open (vk_sink->window, &error)) {
         GST_ELEMENT_ERROR (vk_sink, RESOURCE, NOT_FOUND,
@@ -500,4 +520,18 @@ gst_vulkan_sink_show_frame (GstVideoSink * vsink, GstBuffer * buf)
   }
 
   return GST_FLOW_OK;
+}
+
+static void
+gst_vulkan_sink_set_window_handle (GstVideoOverlay * voverlay, guintptr handle)
+{
+  GstVulkanSink *vk_sink = GST_VULKAN_SINK (voverlay);
+
+  vk_sink->set_window_handle = handle;
+}
+
+static void
+gst_vulkan_sink_video_overlay_init (GstVideoOverlayInterface * iface)
+{
+  iface->set_window_handle = gst_vulkan_sink_set_window_handle;
 }

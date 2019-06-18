@@ -1,81 +1,32 @@
-vulkan_sources = [
-  'gstvulkan.c',
-  'vkbuffermemory.c',
-  'vkbufferpool.c',
-  'vkdevice.c',
-  'vkdisplay.c',
-  'vkerror.c',
-  'vkfence.c',
-  'vkimagememory.c',
-  'vkinstance.c',
-  'vkmemory.c',
-  'vkqueue.c',
-  'vksink.c',
-  'vkswapper.c',
-  'vktrash.c',
-  'vkupload.c',
-  'vkutils.c',
-  'vkwindow.c',
-]
-
-vulkan_defines = []
-optional_deps = []
 if get_option('vulkan').disabled()
   subdir_done()
 endif
-
-vulkan_dep = cc.find_library('vulkan', required : get_option('vulkan'))
-has_vulkan_header = cc.has_header('vulkan/vulkan.h')
-if not has_vulkan_header and get_option('vulkan').enabled()
-  error('vulkan plugin enabled, but vulkan.h not found')
+glslc = find_program('glslc', required: get_option('vulkan'))
+if not glslc.found()
+  subdir_done()
 endif
 
-if vulkan_dep.found() and has_vulkan_header
-  have_vulkan_windowing = false
+subdir('shaders')
 
-  vkconf = configuration_data()
+vulkan_sources = [
+  'gstvulkan.c',
+  'vkimageidentity.c',
+  'vksink.c',
+  'vkshader.c',
+  'vkswapper.c',
+  'vktrash.c',
+  'vkupload.c',
+]
 
-  xcb_dep = dependency('xcb', version : '>=1.10', required : get_option('x11'))
-  if xcb_dep.found()
-    vulkan_sources += [
-      'xcb/vkdisplay_xcb.c',
-      'xcb/vkwindow_xcb.c',
-      'xcb/xcb_event_source.c',
-    ]
-
-    optional_deps += xcb_dep
-    have_vulkan_windowing = true
-    vkconf.set10('GST_VULKAN_HAVE_WINDOW_XCB', 1)
-  endif
-
-  wayland_client_dep = dependency('wayland-client', version : '>=1.4', required : get_option('wayland'))
-  if wayland_client_dep.found()
-    vulkan_sources += [
-      'wayland/vkdisplay_wayland.c',
-      'wayland/vkwindow_wayland.c',
-      'wayland/wayland_event_source.c',
-    ]
-
-    optional_deps += wayland_client_dep
-    have_vulkan_windowing = true
-    vkconf.set10('GST_VULKAN_HAVE_WINDOW_WAYLAND', 1)
-  endif
-
-  if have_vulkan_windowing
-    configure_file(input : 'vkconfig.h.meson',
-      output : 'vkconfig.h',
-      configuration : vkconf)
-
-    gstvulkan = library('gstvulkan',
-      vulkan_sources,
-      c_args : gst_plugins_bad_args + vulkan_defines,
-      link_args : noseh_link_args,
-      include_directories : [configinc],
-      dependencies : [vulkan_dep, gstvideo_dep, gstbase_dep] + optional_deps,
-      install : true,
-      install_dir : plugins_install_dir,
-    )
-    pkgconfig.generate(gstvulkan, install_dir : plugins_pkgconfig_install_dir)
-  endif
-endif
-
+gstvulkan_plugin = library('gstvulkan',
+  vulkan_sources, vulkan_compiled_shader_sources,
+  c_args : gst_plugins_bad_args,
+  objc_args : gst_plugins_bad_args,
+  link_args : noseh_link_args,
+  include_directories : [configinc],
+  dependencies : [gstvideo_dep, gstbase_dep, gstvulkan_dep, vulkan_dep],
+  install : true,
+  install_dir : plugins_install_dir,
+)
+pkgconfig.generate(gstvulkan_plugin, install_dir : plugins_pkgconfig_install_dir)
+plugins += [gstvulkan_plugin]

@@ -21,6 +21,10 @@
 /**
  * SECTION:element-ccextractor
  * @title: ccextractor
+ * @short_description: Extract GstVideoCaptionMeta from input stream
+ *
+ * Note: This element must be added after a pipeline's decoder, otherwise closed captions may
+ * be extracted out of order.
  *
  */
 
@@ -373,6 +377,7 @@ gst_cc_extractor_handle_meta (GstCCExtractor * filter, GstBuffer * buf,
   if (tc_meta)
     gst_buffer_add_video_time_code_meta (outbuf, &tc_meta->tc);
 
+  gst_buffer_set_flags (outbuf, gst_buffer_get_flags (buf));
   /* We don't really care about the flow return */
   flow = gst_pad_push (filter->captionpad, outbuf);
 

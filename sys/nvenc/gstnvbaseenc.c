@@ -179,6 +179,10 @@ struct gl_input_resource
   gsize cuda_num_bytes;
   NV_ENC_REGISTER_RESOURCE nv_resource;
   NV_ENC_MAP_INPUT_RESOURCE nv_mapped_resource;
+
+  /* whether nv_mapped_resource was mapped via NvEncMapInputResource()
+   * and therefore should unmap via NvEncUnmapInputResource or not */
+  gboolean mapped;
 };
 #endif
 
@@ -210,7 +214,8 @@ static void gst_nv_base_enc_get_property (GObject * object, guint prop_id,
 static void gst_nv_base_enc_finalize (GObject * obj);
 static GstCaps *gst_nv_base_enc_getcaps (GstVideoEncoder * enc,
     GstCaps * filter);
-static gboolean gst_nv_base_enc_stop_bitstream_thread (GstNvBaseEnc * nvenc);
+static gboolean gst_nv_base_enc_stop_bitstream_thread (GstNvBaseEnc * nvenc,
+    gboolean force);
 
 static void
 gst_nv_base_enc_class_init (GstNvBaseEncClass * klass)
@@ -291,8 +296,10 @@ _get_supported_input_formats (GstNvBaseEnc * nvenc)
   guint64 format_mask = 0;
   uint32_t i, num = 0;
   NV_ENC_BUFFER_FORMAT formats[64];
-  GValue list = G_VALUE_INIT;
   GValue val = G_VALUE_INIT;
+
+  if (nvenc->input_formats)
+    return TRUE;
 
   NvEncGetInputFormats (nvenc->encoder, nvenc_class->codec_id, formats,
       G_N_ELEMENTS (formats), &num);
@@ -360,30 +367,30 @@ _get_supported_input_formats (GstNvBaseEnc * nvenc)
   if (format_mask == 0)
     return FALSE;
 
+  GST_OBJECT_LOCK (nvenc);
+  nvenc->input_formats = g_new0 (GValue, 1);
+
   /* process a second time so we can add formats in the order we want */
-  g_value_init (&list, GST_TYPE_LIST);
+  g_value_init (nvenc->input_formats, GST_TYPE_LIST);
   g_value_init (&val, G_TYPE_STRING);
   if ((format_mask & (1 << GST_VIDEO_FORMAT_NV12))) {
     g_value_set_static_string (&val, "NV12");
-    gst_value_list_append_value (&list, &val);
+    gst_value_list_append_value (nvenc->input_formats, &val);
   }
   if ((format_mask & (1 << GST_VIDEO_FORMAT_YV12))) {
     g_value_set_static_string (&val, "YV12");
-    gst_value_list_append_value (&list, &val);
+    gst_value_list_append_value (nvenc->input_formats, &val);
   }
   if ((format_mask & (1 << GST_VIDEO_FORMAT_I420))) {
     g_value_set_static_string (&val, "I420");
-    gst_value_list_append_value (&list, &val);
+    gst_value_list_append_value (nvenc->input_formats, &val);
   }
   if ((format_mask & (1 << GST_VIDEO_FORMAT_Y444))) {
     g_value_set_static_string (&val, "Y444");
-    gst_value_list_append_value (&list, &val);
+    gst_value_list_append_value (nvenc->input_formats, &val);
   }
   g_value_unset (&val);
 
-  GST_OBJECT_LOCK (nvenc);
-  g_free (nvenc->input_formats);
-  nvenc->input_formats = g_memdup (&list, sizeof (GValue));
   GST_OBJECT_UNLOCK (nvenc);
 
   return TRUE;
@@ -506,9 +513,14 @@ gst_nv_base_enc_stop (GstVideoEncoder * enc)
 {
   GstNvBaseEnc *nvenc = GST_NV_BASE_ENC (enc);
 
-  gst_nv_base_enc_stop_bitstream_thread (nvenc);
+  gst_nv_base_enc_stop_bitstream_thread (nvenc, TRUE);
 
   gst_nv_base_enc_free_buffers (nvenc);
+
+  if (nvenc->input_state) {
+    gst_video_codec_state_unref (nvenc->input_state);
+    nvenc->input_state = NULL;
+  }
 
   if (nvenc->bitstream_pool) {
     g_async_queue_unref (nvenc->bitstream_pool);
@@ -559,7 +571,7 @@ _get_interlace_modes (GstNvBaseEnc * nvenc)
     g_value_set_static_string (&val, "interleaved");
     gst_value_list_append_value (list, &val);
     g_value_set_static_string (&val, "mixed");
-    gst_value_list_append_value (list, &val);
+    gst_value_list_append_and_take_value (list, &val);
   }
   /* TODO: figure out what nvenc frame based interlacing means in gst terms */
 
@@ -584,6 +596,7 @@ gst_nv_base_enc_getcaps (GstVideoEncoder * enc, GstCaps * filter)
 
     val = _get_interlace_modes (nvenc);
     gst_caps_set_value (supported_incaps, "interlace-mode", val);
+    g_value_unset (val);
     g_free (val);
 
     GST_LOG_OBJECT (enc, "codec input caps %" GST_PTR_FORMAT, supported_incaps);
@@ -625,6 +638,8 @@ gst_nv_base_enc_close (GstVideoEncoder * enc)
   }
 
   GST_OBJECT_LOCK (nvenc);
+  if (nvenc->input_formats)
+    g_value_unset (nvenc->input_formats);
   g_free (nvenc->input_formats);
   nvenc->input_formats = NULL;
   GST_OBJECT_UNLOCK (nvenc);
@@ -826,6 +841,8 @@ gst_nv_base_enc_bitstream_thread (gpointer user_data)
         nv_ret =
             NvEncUnmapInputResource (nvenc->encoder,
             in_gl_resource->nv_mapped_resource.mappedResource);
+        in_gl_resource->mapped = FALSE;
+
         if (nv_ret != NV_ENC_SUCCESS) {
           GST_ERROR_OBJECT (nvenc, "Failed to unmap input resource %p, ret %d",
               in_gl_resource, nv_ret);
@@ -878,29 +895,37 @@ gst_nv_base_enc_start_bitstream_thread (GstNvBaseEnc * nvenc)
 }
 
 static gboolean
-gst_nv_base_enc_stop_bitstream_thread (GstNvBaseEnc * nvenc)
+gst_nv_base_enc_stop_bitstream_thread (GstNvBaseEnc * nvenc, gboolean force)
 {
   gpointer out_buf;
 
   if (nvenc->bitstream_thread == NULL)
     return TRUE;
 
-  /* FIXME */
-  GST_FIXME_OBJECT (nvenc, "stop bitstream reading thread properly");
-  g_async_queue_lock (nvenc->bitstream_queue);
-  g_async_queue_lock (nvenc->bitstream_pool);
-  while ((out_buf = g_async_queue_try_pop_unlocked (nvenc->bitstream_queue))) {
-    GST_INFO_OBJECT (nvenc, "stole bitstream buffer %p from queue", out_buf);
-    g_async_queue_push_unlocked (nvenc->bitstream_pool, out_buf);
+  if (force) {
+    g_async_queue_lock (nvenc->bitstream_queue);
+    g_async_queue_lock (nvenc->bitstream_pool);
+    while ((out_buf = g_async_queue_try_pop_unlocked (nvenc->bitstream_queue))) {
+      GST_INFO_OBJECT (nvenc, "stole bitstream buffer %p from queue", out_buf);
+      g_async_queue_push_unlocked (nvenc->bitstream_pool, out_buf);
+    }
+    g_async_queue_push_unlocked (nvenc->bitstream_queue, SHUTDOWN_COOKIE);
+    g_async_queue_unlock (nvenc->bitstream_pool);
+    g_async_queue_unlock (nvenc->bitstream_queue);
+  } else {
+    /* wait for encoder to drain the remaining buffers */
+    g_async_queue_push (nvenc->bitstream_queue, SHUTDOWN_COOKIE);
   }
-  g_async_queue_push_unlocked (nvenc->bitstream_queue, SHUTDOWN_COOKIE);
-  g_async_queue_unlock (nvenc->bitstream_pool);
-  g_async_queue_unlock (nvenc->bitstream_queue);
 
-  /* temporary unlock, so other thread can find and push frame */
-  GST_VIDEO_ENCODER_STREAM_UNLOCK (nvenc);
+  if (!force) {
+    /* temporary unlock during finish, so other thread can find and push frame */
+    GST_VIDEO_ENCODER_STREAM_UNLOCK (nvenc);
+  }
+
   g_thread_join (nvenc->bitstream_thread);
-  GST_VIDEO_ENCODER_STREAM_LOCK (nvenc);
+
+  if (!force)
+    GST_VIDEO_ENCODER_STREAM_LOCK (nvenc);
 
   nvenc->bitstream_thread = NULL;
   return TRUE;
@@ -952,12 +977,32 @@ gst_nv_base_enc_free_buffers (GstNvBaseEnc * nvenc)
       struct gl_input_resource *in_gl_resource = nvenc->input_bufs[i];
 
       cuCtxPushCurrent (nvenc->cuda_ctx);
+
+      if (in_gl_resource->mapped) {
+        GST_LOG_OBJECT (nvenc, "Unmap resource %p", in_gl_resource);
+
+        nv_ret =
+            NvEncUnmapInputResource (nvenc->encoder,
+            in_gl_resource->nv_mapped_resource.mappedResource);
+
+        if (nv_ret != NV_ENC_SUCCESS) {
+          GST_ERROR_OBJECT (nvenc, "Failed to unmap input resource %p, ret %d",
+              in_gl_resource, nv_ret);
+        }
+      }
+
       nv_ret =
           NvEncUnregisterResource (nvenc->encoder,
           in_gl_resource->nv_resource.registeredResource);
       if (nv_ret != NV_ENC_SUCCESS)
         GST_ERROR_OBJECT (nvenc, "Failed to unregister resource %p, ret %d",
             in_gl_resource, nv_ret);
+
+      nv_ret = cuMemFree ((CUdeviceptr) in_gl_resource->cuda_pointer);
+      if (nv_ret != NV_ENC_SUCCESS) {
+        GST_ERROR_OBJECT (nvenc, "Failed to free CUDA device memory, ret %d",
+            nv_ret);
+      }
 
       g_free (in_gl_resource);
       cuCtxPopCurrent (NULL);
@@ -1054,6 +1099,7 @@ gst_nv_base_enc_set_format (GstVideoEncoder * enc, GstVideoCodecState * state)
   NV_ENC_INITIALIZE_PARAMS *params;
   NV_ENC_PRESET_CONFIG preset_config = { 0, };
   NVENCSTATUS nv_ret;
+  gint dar_n, dar_d;
 
   g_atomic_int_set (&nvenc->reconfig, FALSE);
 
@@ -1159,6 +1205,14 @@ gst_nv_base_enc_set_format (GstVideoEncoder * enc, GstVideoCodecState * state)
     params->frameRateDen = info->fps_d;
   } else {
     GST_FIXME_OBJECT (nvenc, "variable framerate");
+  }
+
+  if (gst_util_fraction_multiply (GST_VIDEO_INFO_WIDTH (info),
+          GST_VIDEO_INFO_HEIGHT (info), GST_VIDEO_INFO_PAR_N (info),
+          GST_VIDEO_INFO_PAR_D (info), &dar_n, &dar_d) && dar_n > 0
+      && dar_d > 0) {
+    params->darWidth = dar_n;
+    params->darHeight = dar_d;
   }
 
   if (nvenc->rate_control_mode != GST_NV_RC_MODE_DEFAULT) {
@@ -1715,6 +1769,8 @@ gst_nv_base_enc_handle_frame (GstVideoEncoder * enc, GstVideoCodecFrame * frame)
       goto error;
     }
 
+    in_gl_resource->mapped = TRUE;
+
     out_buf = g_async_queue_try_pop (nvenc->bitstream_pool);
     if (out_buf == NULL) {
       GST_DEBUG_OBJECT (nvenc, "wait for output buf to become available again");
@@ -1815,6 +1871,29 @@ gst_nv_base_enc_handle_frame (GstVideoEncoder * enc, GstVideoCodecFrame * frame)
         dest += dest_stride;
         src += src_stride;
       }
+    } else if (GST_VIDEO_FRAME_FORMAT (&vframe) == GST_VIDEO_FORMAT_Y444) {
+      src = GST_VIDEO_FRAME_PLANE_DATA (&vframe, 1);
+      src_stride = GST_VIDEO_FRAME_PLANE_STRIDE (&vframe, 1);
+      dest = (guint8 *) in_buf_lock.bufferDataPtr +
+          GST_ROUND_UP_32 (height) * in_buf_lock.pitch;
+      dest_stride = in_buf_lock.pitch;
+
+      for (y = 0; y < height; ++y) {
+        memcpy (dest, src, width);
+        dest += dest_stride;
+        src += src_stride;
+      }
+
+      src = GST_VIDEO_FRAME_PLANE_DATA (&vframe, 2);
+      src_stride = GST_VIDEO_FRAME_PLANE_STRIDE (&vframe, 2);
+      dest = (guint8 *) in_buf_lock.bufferDataPtr +
+          2 * GST_ROUND_UP_32 (height) * in_buf_lock.pitch;
+
+      for (y = 0; y < height; ++y) {
+        memcpy (dest, src, width);
+        dest += dest_stride;
+        src += src_stride;
+      }
     } else {
       // FIXME: this only works for NV12 and I420
       g_assert_not_reached ();
@@ -1897,12 +1976,10 @@ gst_nv_base_enc_finish (GstVideoEncoder * enc)
 {
   GstNvBaseEnc *nvenc = GST_NV_BASE_ENC (enc);
 
-  GST_FIXME_OBJECT (enc, "implement finish");
+  if (!gst_nv_base_enc_drain_encoder (nvenc))
+    return GST_FLOW_ERROR;
 
-  gst_nv_base_enc_drain_encoder (nvenc);
-
-  /* wait for encoder to output the remaining buffers */
-  gst_nv_base_enc_stop_bitstream_thread (nvenc);
+  gst_nv_base_enc_stop_bitstream_thread (nvenc, FALSE);
 
   return GST_FLOW_OK;
 }

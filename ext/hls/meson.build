@@ -12,6 +12,8 @@ hls_cargs = ['-DGST_USE_UNSTABLE_API']
 
 hls_crypto = get_option('hls-crypto')
 hls_option = get_option('hls')
+# used for unit test
+hls_dep = dependency('', required : false)
 
 have_hls_crypto = false
 if not hls_option.disabled()
@@ -23,7 +25,7 @@ if not hls_option.disabled()
     endif
   endif
 
-  if not hls_crypto_dep.found() and ['auto', 'libgcrypt'].contains(hls_crypto)
+  if not have_hls_crypto and ['auto', 'libgcrypt'].contains(hls_crypto)
     hls_crypto_dep = cc.find_library('gcrypt', required : false)
     if hls_crypto_dep.found()
       have_hls_crypto = true
@@ -31,7 +33,7 @@ if not hls_option.disabled()
     endif
   endif
 
-  if not hls_crypto_dep.found() and ['auto', 'openssl'].contains(hls_crypto)
+  if not have_hls_crypto and ['auto', 'openssl'].contains(hls_crypto)
     hls_crypto_dep = dependency('openssl', required : false)
     if hls_crypto_dep.found()
       have_hls_crypto = true
@@ -61,4 +63,6 @@ if have_hls_crypto
     install_dir : plugins_install_dir,
   )
   pkgconfig.generate(gsthls, install_dir : plugins_pkgconfig_install_dir)
+  plugins += [gsthls]
+  hls_dep = declare_dependency(include_directories : include_directories('.'))
 endif

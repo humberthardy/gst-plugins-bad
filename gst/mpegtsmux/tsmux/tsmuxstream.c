@@ -89,7 +89,7 @@
 #include "tsmuxcommon.h"
 #include "tsmuxstream.h"
 
-#define GST_CAT_DEFAULT mpegtsmux_debug
+#define GST_CAT_DEFAULT gst_base_ts_mux_debug
 
 static guint8 tsmux_stream_pes_header_length (TsMuxStream * stream);
 static void tsmux_stream_write_pes_header (TsMuxStream * stream, guint8 * data);
@@ -122,7 +122,7 @@ struct TsMuxStreamBuffer
  * Returns: a new #TsMuxStream.
  */
 TsMuxStream *
-tsmux_stream_new (guint16 pid, TsMuxStreamType stream_type)
+tsmux_stream_new (guint16 pid, guint stream_type)
 {
   TsMuxStream *stream = g_slice_new0 (TsMuxStream);
 
@@ -220,15 +220,21 @@ tsmux_stream_new (guint16 pid, TsMuxStreamType stream_type)
       stream->pi.flags |= TSMUX_PACKET_FLAG_PES_FULL_HEADER;
       break;
     default:
-      g_critical ("Stream type 0x%0x not yet implemented", stream_type);
+      /* Might be a custom stream type implemented by a subclass */
       break;
   }
+
+  stream->first_ts = GST_CLOCK_STIME_NONE;
 
   stream->last_pts = GST_CLOCK_STIME_NONE;
   stream->last_dts = GST_CLOCK_STIME_NONE;
 
   stream->pcr_ref = 0;
-  stream->last_pcr = -1;
+  stream->next_pcr = -1;
+
+  stream->get_es_descrs =
+      (TsMuxStreamGetESDescriptorsFunc) tsmux_stream_default_get_es_descrs;
+  stream->get_es_descrs_data = NULL;
 
   return stream;
 }
@@ -293,6 +299,25 @@ tsmux_stream_set_buffer_release_func (TsMuxStream * stream,
   stream->buffer_release = func;
 }
 
+/**
+ * tsmux_stream_set_get_es_descriptors_func:
+ * @stream: a #TsMuxStream
+ * @func: a user callback function
+ * @user_data: user data passed to @func
+ *
+ * Set the callback function and user data to be called when @stream has
+ * to create Elementary Stream Descriptors.
+ */
+void
+tsmux_stream_set_get_es_descriptors_func (TsMuxStream * stream,
+    TsMuxStreamGetESDescriptorsFunc func, void *user_data)
+{
+  g_return_if_fail (stream != NULL);
+
+  stream->get_es_descrs = func;
+  stream->get_es_descrs_data = user_data;
+}
+
 /* Advance the current packet stream position by len bytes.
  * Mustn't consume more than available in the current packet */
 static void
@@ -307,10 +332,9 @@ tsmux_stream_consume (TsMuxStream * stream, guint len)
   if (stream->cur_buffer_consumed == 0 && stream->cur_buffer->size != 0)
     return;
 
-  if (GST_CLOCK_STIME_IS_VALID (stream->cur_buffer->pts)) {
+  if (GST_CLOCK_STIME_IS_VALID (stream->cur_buffer->pts))
     stream->last_pts = stream->cur_buffer->pts;
-    stream->last_dts = stream->cur_buffer->dts;
-  } else if (GST_CLOCK_STIME_IS_VALID (stream->cur_buffer->dts))
+  if (GST_CLOCK_STIME_IS_VALID (stream->cur_buffer->dts))
     stream->last_dts = stream->cur_buffer->dts;
 
   if (stream->cur_buffer_consumed == stream->cur_buffer->size) {
@@ -716,15 +740,17 @@ tsmux_stream_add_data (TsMuxStream * stream, guint8 * data, guint len,
   packet->pts = pts;
   packet->dts = dts;
 
-  if (stream->bytes_avail == 0)
+  if (stream->bytes_avail == 0) {
     stream->last_pts = pts;
+    stream->last_dts = dts;
+  }
 
   stream->bytes_avail += len;
   stream->buffers = g_list_append (stream->buffers, packet);
 }
 
 /**
- * tsmux_stream_get_es_descrs:
+ * tsmux_stream_default_get_es_descrs:
  * @stream: a #TsMuxStream
  * @buf: a buffer to hold the ES descriptor
  * @len: the length used in @buf
@@ -735,7 +761,7 @@ tsmux_stream_add_data (TsMuxStream * stream, guint8 * data, guint len,
  * @buf and @len must be at least #TSMUX_MIN_ES_DESC_LEN.
  */
 void
-tsmux_stream_get_es_descrs (TsMuxStream * stream,
+tsmux_stream_default_get_es_descrs (TsMuxStream * stream,
     GstMpegtsPMTStream * pmt_stream)
 {
   GstMpegtsDescriptor *descriptor;
@@ -1037,6 +1063,26 @@ tsmux_stream_get_es_descrs (TsMuxStream * stream,
 }
 
 /**
+ * tsmux_stream_get_es_descrs:
+ * @stream: a #TsMuxStream
+ * @buf: a buffer to hold the ES descriptor
+ * @len: the length used in @buf
+ *
+ * Write an Elementary Stream Descriptor for @stream into @buf. the number of
+ * bytes consumed in @buf will be updated in @len.
+ *
+ * @buf and @len must be at least #TSMUX_MIN_ES_DESC_LEN.
+ */
+void
+tsmux_stream_get_es_descrs (TsMuxStream * stream,
+    GstMpegtsPMTStream * pmt_stream)
+{
+  g_return_if_fail (stream->get_es_descrs != NULL);
+
+  return stream->get_es_descrs (stream, pmt_stream, stream->get_es_descrs_data);
+}
+
+/**
  * tsmux_stream_pcr_ref:
  * @stream: a #TsMuxStream
  *
@@ -1087,10 +1133,27 @@ tsmux_stream_is_pcr (TsMuxStream * stream)
  *
  * Returns: the PTS of the last buffer in @stream.
  */
-guint64
+gint64
 tsmux_stream_get_pts (TsMuxStream * stream)
 {
   g_return_val_if_fail (stream != NULL, GST_CLOCK_STIME_NONE);
 
   return stream->last_pts;
+}
+
+/**
+ * tsmux_stream_get_dts:
+ * @stream: a #TsMuxStream
+ *
+ * Return the DTS of the last buffer that has had bytes written and
+ * which _had_ a DTS in @stream.
+ *
+ * Returns: the DTS of the last buffer in @stream.
+ */
+gint64
+tsmux_stream_get_dts (TsMuxStream * stream)
+{
+  g_return_val_if_fail (stream != NULL, GST_CLOCK_STIME_NONE);
+
+  return stream->last_dts;
 }

@@ -151,8 +151,23 @@ ensure_bitrate_control (GstMsdkEnc * thiz)
 
   mfx->RateControlMethod = thiz->rate_control;
   /* No effect in CQP varient algorithms */
-  mfx->TargetKbps = thiz->bitrate;
-  mfx->MaxKbps = thiz->max_vbv_bitrate;
+  if ((mfx->RateControlMethod != MFX_RATECONTROL_CQP) &&
+      (thiz->bitrate > G_MAXUINT16 || thiz->max_vbv_bitrate > G_MAXUINT16)) {
+    mfxU32 max_val = MAX (thiz->max_vbv_bitrate, thiz->bitrate);
+
+    mfx->BRCParamMultiplier = (mfxU16) ((max_val + 0x10000) / 0x10000);
+    mfx->TargetKbps = (mfxU16) (thiz->bitrate / mfx->BRCParamMultiplier);
+    mfx->MaxKbps = (mfxU16) (thiz->max_vbv_bitrate / mfx->BRCParamMultiplier);
+    mfx->BufferSizeInKB =
+        (mfxU16) (mfx->BufferSizeInKB / mfx->BRCParamMultiplier);
+    /* Currently InitialDelayInKB is not used in this plugin */
+    mfx->InitialDelayInKB =
+        (mfxU16) (mfx->InitialDelayInKB / mfx->BRCParamMultiplier);
+  } else {
+    mfx->TargetKbps = thiz->bitrate;
+    mfx->MaxKbps = thiz->max_vbv_bitrate;
+    mfx->BRCParamMultiplier = 1;
+  }
 
   switch (mfx->RateControlMethod) {
     case MFX_RATECONTROL_CQP:
@@ -351,9 +366,14 @@ gst_msdkenc_init_encoder (GstMsdkEnc * thiz)
 
     status = MFXVideoVPP_GetVideoParam (session, &thiz->vpp_param);
     if (status < MFX_ERR_NONE) {
+      mfxStatus status1;
       GST_ERROR_OBJECT (thiz, "Get VPP Parameters failed (%s)",
           msdk_status_to_string (status));
-      MFXVideoVPP_Close (session);
+      status1 = MFXVideoVPP_Close (session);
+      if (status1 != MFX_ERR_NONE && status1 != MFX_ERR_NOT_INITIALIZED)
+        GST_WARNING_OBJECT (thiz, "VPP close failed (%s)",
+            msdk_status_to_string (status1));
+
       goto no_vpp;
     } else if (status > MFX_ERR_NONE) {
       GST_WARNING_OBJECT (thiz, "Get VPP Parameters returned: %s",
@@ -483,13 +503,15 @@ gst_msdkenc_init_encoder (GstMsdkEnc * thiz)
   thiz->tasks = g_new0 (MsdkEncTask, thiz->num_tasks);
   for (i = 0; i < thiz->num_tasks; i++) {
     thiz->tasks[i].output_bitstream.Data = _aligned_alloc (32,
-        thiz->param.mfx.BufferSizeInKB * 1024);
+        thiz->param.mfx.BufferSizeInKB * thiz->param.mfx.BRCParamMultiplier *
+        1024);
     if (!thiz->tasks[i].output_bitstream.Data) {
       GST_ERROR_OBJECT (thiz, "Memory allocation failed");
       goto failed;
     }
     thiz->tasks[i].output_bitstream.MaxLength =
-        thiz->param.mfx.BufferSizeInKB * 1024;
+        thiz->param.mfx.BufferSizeInKB * thiz->param.mfx.BRCParamMultiplier *
+        1024;
   }
   thiz->next_task = 0;
 
@@ -689,8 +711,10 @@ gst_msdkenc_finish_frame (GstMsdkEnc * thiz, MsdkEncTask * task,
    * is used in MSDK samples
    * #define MSDK_ENC_WAIT_INTERVAL 300000
    */
-  MFXVideoCORE_SyncOperation (gst_msdk_context_get_session (thiz->context),
-      task->sync_point, 300000);
+  if (MFXVideoCORE_SyncOperation (gst_msdk_context_get_session (thiz->context),
+          task->sync_point, 300000) != MFX_ERR_NONE)
+    GST_WARNING_OBJECT (thiz, "failed to do sync operation");
+
   if (!discard && task->output_bitstream.DataLength) {
     GstBuffer *out_buf = NULL;
     guint8 *data =
@@ -830,6 +854,7 @@ gst_msdkenc_flush_frames (GstMsdkEnc * thiz, gboolean discard)
     if (status != MFX_ERR_NONE && status != MFX_ERR_MORE_DATA) {
       GST_ELEMENT_ERROR (thiz, STREAM, ENCODE, ("Encode frame failed."),
           ("MSDK encode error (%s)", msdk_status_to_string (status)));
+      break;
     }
 
     if (task->sync_point) {
@@ -900,7 +925,7 @@ gst_msdkenc_create_buffer_pool (GstMsdkEnc * thiz, GstCaps * caps,
 
   if (!gst_video_info_from_caps (&info, caps)) {
     GST_INFO_OBJECT (thiz, "failed to get video info");
-    return FALSE;
+    return NULL;
   }
 
   gst_msdk_set_video_alignment (&info, &align);
@@ -946,17 +971,20 @@ gst_msdkenc_create_buffer_pool (GstMsdkEnc * thiz, GstCaps * caps,
 error_no_pool:
   {
     GST_INFO_OBJECT (thiz, "failed to create bufferpool");
-    return FALSE;
+    return NULL;
   }
 error_no_allocator:
   {
     GST_INFO_OBJECT (thiz, "failed to create allocator");
-    return FALSE;
+    gst_object_unref (pool);
+    return NULL;
   }
 error_pool_config:
   {
     GST_INFO_OBJECT (thiz, "failed to set config");
-    return FALSE;
+    gst_object_unref (pool);
+    gst_object_unref (allocator);
+    return NULL;
   }
 }
 
@@ -1394,9 +1422,9 @@ gst_msdkenc_start (GstVideoEncoder * encoder)
       gst_msdk_context_add_job_type (thiz->context, GST_MSDK_JOB_ENCODER);
     }
   } else {
-    gst_msdk_context_ensure_context (GST_ELEMENT_CAST (thiz), thiz->hardware,
-        GST_MSDK_JOB_ENCODER);
-
+    if (!gst_msdk_context_ensure_context (GST_ELEMENT_CAST (thiz),
+            thiz->hardware, GST_MSDK_JOB_ENCODER))
+      return FALSE;
     GST_INFO_OBJECT (thiz, "Creating new context %" GST_PTR_FORMAT,
         thiz->context);
   }
@@ -1813,10 +1841,11 @@ gst_msdkenc_install_common_properties (GstMsdkEncClass * klass)
       0, G_MAXUINT16, PROP_MAX_FRAME_SIZE_DEFAULT,
       G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
+  /* Set the same upper bound with bitrate */
   obj_properties[GST_MSDKENC_PROP_MAX_VBV_BITRATE] =
       g_param_spec_uint ("max-vbv-bitrate", "Max VBV Bitrate",
       "Maximum bitrate(kbit/sec) at which data enters Video Buffering Verifier (0: auto-calculate)",
-      0, G_MAXUINT16, PROP_MAX_VBV_BITRATE_DEFAULT,
+      0, 2000 * 1024, PROP_MAX_VBV_BITRATE_DEFAULT,
       G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
   obj_properties[GST_MSDKENC_PROP_AVBR_ACCURACY] =

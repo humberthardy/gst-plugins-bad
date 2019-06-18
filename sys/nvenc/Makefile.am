@@ -10,7 +10,8 @@ noinst_HEADERS = \
 	gstnvenc.h \
 	gstnvbaseenc.h \
 	gstnvh264enc.h \
-	gstnvh265enc.h
+	gstnvh265enc.h \
+	nvEncodeAPI.h
 
 libgstnvenc_la_CFLAGS = \
 	$(GST_PLUGINS_BAD_CFLAGS) \

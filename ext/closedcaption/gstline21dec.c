@@ -37,34 +37,23 @@
 GST_DEBUG_CATEGORY_STATIC (gst_line_21_decoder_debug);
 #define GST_CAT_DEFAULT gst_line_21_decoder_debug
 
-enum
-{
-  PROP_0,
-};
-
-#define SUPPORTED_FORMATS "{ I420, YUY2, YVYU, UYVY, VYUY, v210 }"
+#define CAPS "video/x-raw, format={ I420, YUY2, YVYU, UYVY, VYUY, v210 }, interlace-mode=interleaved"
 
 static GstStaticPadTemplate sinktemplate = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (SUPPORTED_FORMATS)));
+    GST_STATIC_CAPS (CAPS));
 
 static GstStaticPadTemplate srctemplate = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (SUPPORTED_FORMATS)));
+    GST_STATIC_CAPS (CAPS));
 
 G_DEFINE_TYPE (GstLine21Decoder, gst_line_21_decoder, GST_TYPE_VIDEO_FILTER);
 #define parent_class gst_line_21_decoder_parent_class
 
-static void gst_line_21_decoder_set_property (GObject * object, guint prop_id,
-    const GValue * value, GParamSpec * pspec);
-static void gst_line_21_decoder_get_property (GObject * object, guint prop_id,
-    GValue * value, GParamSpec * pspec);
-
-static GstStateChangeReturn gst_line_21_decoder_change_state (GstElement *
-    element, GstStateChange transition);
 static void gst_line_21_decoder_finalize (GObject * self);
+static gboolean gst_line_21_decoder_stop (GstBaseTransform * btrans);
 static gboolean gst_line_21_decoder_set_info (GstVideoFilter * filter,
     GstCaps * incaps, GstVideoInfo * in_info,
     GstCaps * outcaps, GstVideoInfo * out_info);
@@ -86,22 +75,18 @@ gst_line_21_decoder_class_init (GstLine21DecoderClass * klass)
   transform_class = (GstBaseTransformClass *) klass;
   filter_class = (GstVideoFilterClass *) klass;
 
-  gobject_class->set_property = gst_line_21_decoder_set_property;
-  gobject_class->get_property = gst_line_21_decoder_get_property;
   gobject_class->finalize = gst_line_21_decoder_finalize;
-
-  gstelement_class->change_state =
-      GST_DEBUG_FUNCPTR (gst_line_21_decoder_change_state);
 
   gst_element_class_set_static_metadata (gstelement_class,
       "Line 21 CC Decoder",
-      "Filter",
+      "Filter/Video/ClosedCaption",
       "Extract line21 CC from SD video streams",
       "Edward Hervey <edward@centricular.com>");
 
   gst_element_class_add_static_pad_template (gstelement_class, &sinktemplate);
   gst_element_class_add_static_pad_template (gstelement_class, &srctemplate);
 
+  transform_class->stop = gst_line_21_decoder_stop;
   transform_class->prepare_output_buffer =
       gst_line_21_decoder_prepare_output_buffer;
 
@@ -114,48 +99,12 @@ gst_line_21_decoder_class_init (GstLine21DecoderClass * klass)
 }
 
 static void
-gst_line_21_decoder_reset (GstLine21Decoder * self)
-{
-  self->line21_offset = -1;
-  self->max_line_probes = 40;
-  if (self->info) {
-    gst_video_info_free (self->info);
-    self->info = NULL;
-  }
-  g_free (self->converted_lines);
-  self->converted_lines = NULL;
-}
-
-static void
 gst_line_21_decoder_init (GstLine21Decoder * filter)
 {
-  gst_line_21_decoder_reset (filter);
-}
+  GstLine21Decoder *self = (GstLine21Decoder *) filter;
 
-static void
-gst_line_21_decoder_set_property (GObject * object, guint prop_id,
-    const GValue * value, GParamSpec * pspec)
-{
-  /* GstLine21Decoder *filter = GST_LINE21DECODER (object); */
-
-  switch (prop_id) {
-    default:
-      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
-      break;
-  }
-}
-
-static void
-gst_line_21_decoder_get_property (GObject * object, guint prop_id,
-    GValue * value, GParamSpec * pspec)
-{
-  /* GstLine21Decoder *filter = GST_LINE21DECODER (object); */
-
-  switch (prop_id) {
-    default:
-      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
-      break;
-  }
+  self->line21_offset = -1;
+  self->max_line_probes = 40;
 }
 
 static vbi_pixfmt
@@ -181,7 +130,8 @@ vbi_pixfmt_from_gst_video_format (GstVideoFormat format,
       return VBI_PIXFMT_YUV420;
       /* All the other formats are not really bullet-proof. Force conversion */
     default:
-      return 0;
+      g_assert_not_reached ();
+      return (vbi_pixfmt) 0;
   }
 #undef NATIVE_VBI_FMT
 }
@@ -203,6 +153,17 @@ gst_line_21_decoder_set_info (GstVideoFilter * filter,
       GST_VIDEO_INFO_COMP_PSTRIDE (in_info, 0));
   GST_DEBUG_OBJECT (filter, "#planes : %d #components : %d",
       GST_VIDEO_INFO_N_PLANES (in_info), GST_VIDEO_INFO_N_COMPONENTS (in_info));
+
+  if (self->info) {
+    gst_video_info_free (self->info);
+    self->info = NULL;
+  }
+
+  g_free (self->converted_lines);
+  self->converted_lines = NULL;
+
+  /* Scan the next frame from the first line */
+  self->line21_offset = -1;
 
   if (GST_VIDEO_INFO_WIDTH (in_info) != 720) {
     GST_DEBUG_OBJECT (filter, "Only 720 pixel wide formats are supported");
@@ -243,8 +204,14 @@ gst_line_21_decoder_set_info (GstVideoFilter * filter,
       self->info = gst_video_info_copy (in_info);
 
     /* initialize the decoder */
-    vbi_raw_decoder_init (&self->zvbi_decoder);
-    /* We either deal with PAL (625 lines) or NTSC (525 lines) */
+    if (self->zvbi_decoder.pattern != NULL)
+      vbi_raw_decoder_reset (&self->zvbi_decoder);
+    else
+      vbi_raw_decoder_init (&self->zvbi_decoder);
+    /*
+     * Set up blank / black / white levels fit for NTSC, no actual relation
+     * with the height of the video
+     */
     self->zvbi_decoder.scanning = 525;
     /* The pixel format. Quite a few formats are handled by zvbi, but
      * some are not and require conversion (or cheating) */
@@ -453,44 +420,27 @@ gst_line_21_decoder_transform_ip (GstVideoFilter * filter,
   return GST_FLOW_OK;
 }
 
-static GstStateChangeReturn
-gst_line_21_decoder_change_state (GstElement * element,
-    GstStateChange transition)
+static gboolean
+gst_line_21_decoder_stop (GstBaseTransform * btrans)
 {
-  GstStateChangeReturn ret;
-  GstLine21Decoder *filter = GST_LINE21DECODER (element);
+  GstLine21Decoder *self = (GstLine21Decoder *) btrans;
 
-  switch (transition) {
-    case GST_STATE_CHANGE_NULL_TO_READY:
-      break;
-    case GST_STATE_CHANGE_READY_TO_PAUSED:
-      break;
-    case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
-      break;
-    default:
-      break;
-  }
+  vbi_raw_decoder_destroy (&self->zvbi_decoder);
 
-  ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
-  if (ret != GST_STATE_CHANGE_SUCCESS)
-    return ret;
-
-  switch (transition) {
-    case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
-      break;
-    case GST_STATE_CHANGE_PAUSED_TO_READY:
-      gst_line_21_decoder_reset (filter);
-      break;
-    case GST_STATE_CHANGE_READY_TO_NULL:
-    default:
-      break;
-  }
-
-  return ret;
+  return TRUE;
 }
 
 static void
 gst_line_21_decoder_finalize (GObject * object)
 {
+  GstLine21Decoder *self = (GstLine21Decoder *) object;
+
+  if (self->info) {
+    gst_video_info_free (self->info);
+    self->info = NULL;
+  }
+  g_free (self->converted_lines);
+  self->converted_lines = NULL;
+
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }

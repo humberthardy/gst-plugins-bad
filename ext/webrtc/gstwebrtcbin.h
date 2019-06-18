@@ -81,6 +81,7 @@ struct _GstWebRTCBin
   GstWebRTCSessionDescription      *pending_remote_description;
 
   GstWebRTCBundlePolicy             bundle_policy;
+  GstWebRTCICETransportPolicy       ice_transport_policy;
 
   GstWebRTCBinPrivate              *priv;
 };
@@ -130,6 +131,8 @@ struct _GstWebRTCBinPrivate
   /* count of the number of media streams we've offered for uniqueness */
   /* FIXME: overflow? */
   guint media_counter;
+  /* the number of times create_offer has been called for the version field */
+  guint offer_count;
 
   GstStructure *stats;
 };

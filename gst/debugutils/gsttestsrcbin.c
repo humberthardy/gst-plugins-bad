@@ -171,13 +171,16 @@ src_pad_probe_cb (GstPad * pad, GstPadProbeInfo * info, ProbeData * data)
 static GstFlowReturn
 gst_test_src_bin_chain (GstPad * pad, GstObject * object, GstBuffer * buffer)
 {
-  GstFlowReturn res;
+  GstFlowReturn res, chain_res;
 
   GstTestSrcBin *self = GST_TEST_SRC_BIN (gst_object_get_parent (object));
 
-  res = gst_flow_combiner_update_pad_flow (self->flow_combiner, pad,
-      gst_proxy_pad_chain_default (pad, GST_OBJECT (self), buffer));
+  chain_res = gst_proxy_pad_chain_default (pad, GST_OBJECT (self), buffer);
+  res = gst_flow_combiner_update_pad_flow (self->flow_combiner, pad, chain_res);
   gst_object_unref (self);
+
+  if (res == GST_FLOW_FLUSHING)
+    return chain_res;
 
   return res;
 }
@@ -193,6 +196,40 @@ gst_test_src_bin_set_element_property (GQuark property_id, const GValue * value,
     g_object_set_property (element, g_quark_to_string (property_id), value);
 
   return TRUE;
+}
+
+typedef struct
+{
+  GstEvent *event;
+  gboolean res;
+  GstObject *parent;
+} ForwardEventData;
+
+
+static gboolean
+forward_seeks (GstElement * element, GstPad * pad, ForwardEventData * data)
+{
+  data->res &=
+      gst_pad_event_default (pad, data->parent, gst_event_ref (data->event));
+
+  return TRUE;
+}
+
+static gboolean
+gst_test_src_event_function (GstPad * pad, GstObject * parent, GstEvent * event)
+{
+  switch (GST_EVENT_TYPE (event)) {
+    case GST_EVENT_SEEK:{
+      ForwardEventData data = { event, TRUE, parent };
+
+      gst_element_foreach_src_pad (GST_ELEMENT (parent),
+          (GstElementForeachPadFunc) forward_seeks, &data);
+      return data.res;
+    }
+    default:
+      break;
+  }
+  return gst_pad_event_default (pad, parent, event);
 }
 
 static void
@@ -231,6 +268,8 @@ gst_test_src_bin_setup_src (GstTestSrcBin * self, const gchar * srcfactory,
   gst_flow_combiner_add_pad (self->flow_combiner, ghost);
   gst_pad_set_chain_function (proxypad,
       (GstPadChainFunction) gst_test_src_bin_chain);
+  gst_pad_set_event_function (ghost,
+      (GstPadEventFunction) gst_test_src_event_function);
   gst_object_unref (proxypad);
   gst_element_add_pad (GST_ELEMENT (self), ghost);
   gst_object_unref (pad);

@@ -47,6 +47,7 @@ struct _GstMsdkContextPrivate
   GList *cached_alloc_responses;
   gboolean hardware;
   gboolean is_joined;
+  gboolean has_frame_allocator;
   GstMsdkContextJobType job_type;
   gint shared_async_depth;
   GMutex mutex;
@@ -93,7 +94,8 @@ get_device_id (void)
       dev = (GUdevDevice *) l->data;
 
       parent = g_udev_device_get_parent (dev);
-      if (strcmp (g_udev_device_get_subsystem (parent), "pci") != 0) {
+      if (strcmp (g_udev_device_get_subsystem (parent), "pci") != 0 ||
+          strcmp (g_udev_device_get_driver (parent), "i915") != 0) {
         g_object_unref (parent);
         continue;
       }
@@ -198,7 +200,6 @@ gst_msdk_context_open (GstMsdkContext * context, gboolean hardware,
 
 failed:
   msdk_close_session (priv->session);
-  gst_object_unref (context);
   return FALSE;
 }
 
@@ -287,13 +288,6 @@ gst_msdk_context_new_with_parent (GstMsdkContext * parent)
     return NULL;
   }
 
-  status = MFXJoinSession (parent_priv->session, priv->session);
-  if (status != MFX_ERR_NONE) {
-    GST_ERROR ("Failed to join mfx session");
-    g_object_unref (obj);
-    return NULL;
-  }
-
   priv->is_joined = TRUE;
   priv->hardware = parent_priv->hardware;
   priv->job_type = parent_priv->job_type;
@@ -306,6 +300,14 @@ gst_msdk_context_new_with_parent (GstMsdkContext * parent)
   if (priv->hardware) {
     status = MFXVideoCORE_SetHandle (priv->session, MFX_HANDLE_VA_DISPLAY,
         (mfxHDL) parent_priv->dpy);
+
+    if (status != MFX_ERR_NONE) {
+      GST_ERROR ("Setting VA handle failed (%s)",
+          msdk_status_to_string (status));
+      g_object_unref (obj);
+      return NULL;
+    }
+
   }
 #endif
 
@@ -596,4 +598,26 @@ gst_msdk_context_add_shared_async_depth (GstMsdkContext * context,
     gint async_depth)
 {
   context->priv->shared_async_depth += async_depth;
+}
+
+void
+gst_msdk_context_set_frame_allocator (GstMsdkContext * context,
+    mfxFrameAllocator * allocator)
+{
+  GstMsdkContextPrivate *priv = context->priv;
+
+  g_mutex_lock (&priv->mutex);
+
+  if (!priv->has_frame_allocator) {
+    mfxStatus status;
+
+    status = MFXVideoCORE_SetFrameAllocator (priv->session, allocator);
+
+    if (status != MFX_ERR_NONE)
+      GST_ERROR ("Failed to set frame allocator");
+    else
+      priv->has_frame_allocator = 1;
+  }
+
+  g_mutex_unlock (&priv->mutex);
 }

@@ -24,7 +24,6 @@
 
 #include <gst/base/base.h>
 #include <gst/pbutils/pbutils.h>
-#include <gst/video/video.h>
 #include "gsth265parse.h"
 
 #include <string.h>
@@ -66,6 +65,13 @@ enum
   GST_H265_PARSE_STATE_VALID_PICTURE =
       (GST_H265_PARSE_STATE_VALID_PICTURE_HEADERS |
       GST_H265_PARSE_STATE_GOT_SLICE)
+};
+
+enum
+{
+  GST_H265_PARSE_SEI_EXPIRED = 0,
+  GST_H265_PARSE_SEI_ACTIVE = 1,
+  GST_H265_PARSE_SEI_PARSED = 2,
 };
 
 #define GST_H265_PARSE_STATE_VALID(parse, expected_state) \
@@ -226,6 +232,12 @@ gst_h265_parse_reset_stream_info (GstH265Parse * h265parse)
     gst_buffer_replace (&h265parse->sps_nals[i], NULL);
   for (i = 0; i < GST_H265_MAX_PPS_COUNT; i++)
     gst_buffer_replace (&h265parse->pps_nals[i], NULL);
+
+  gst_video_mastering_display_info_init (&h265parse->mastering_display_info);
+  h265parse->mastering_display_info_state = GST_H265_PARSE_SEI_EXPIRED;
+
+  gst_video_content_light_level_init (&h265parse->content_light_level);
+  h265parse->content_light_level_state = GST_H265_PARSE_SEI_EXPIRED;
 }
 
 static void
@@ -544,10 +556,109 @@ gst_h265_parse_process_sei (GstH265Parse * h265parse, GstH265NalUnit * nalu)
             sei.payload.recovery_point.broken_link_flag);
         h265parse->keyframe = TRUE;
         break;
-
-      case GST_H265_SEI_BUF_PERIOD:
+      case GST_H265_SEI_TIME_CODE:
+        memcpy (&h265parse->time_code, &sei.payload.time_code,
+            sizeof (GstH265TimeCode));
+        break;
       case GST_H265_SEI_PIC_TIMING:
+        h265parse->sei_pic_struct = sei.payload.pic_timing.pic_struct;
+        break;
+      case GST_H265_SEI_BUF_PERIOD:
         /* FIXME */
+        break;
+      case GST_H265_SEI_MASTERING_DISPLAY_COLOUR_VOLUME:
+      {
+        /* Precision defined by spec.
+         * See D.3.28 Mastering display colour volume SEI message semantics */
+        const guint chroma_den = 50000;
+        const guint luma_den = 10000;
+        GstVideoMasteringDisplayInfo minfo;
+
+        minfo.Gx_n =
+            sei.payload.mastering_display_colour_volume.display_primaries_x[0];
+        minfo.Gy_n =
+            sei.payload.mastering_display_colour_volume.display_primaries_y[0];
+        minfo.Bx_n =
+            sei.payload.mastering_display_colour_volume.display_primaries_x[1];
+        minfo.By_n =
+            sei.payload.mastering_display_colour_volume.display_primaries_y[1];
+        minfo.Rx_n =
+            sei.payload.mastering_display_colour_volume.display_primaries_x[2];
+        minfo.Ry_n =
+            sei.payload.mastering_display_colour_volume.display_primaries_x[2];
+        minfo.Wx_n = sei.payload.mastering_display_colour_volume.white_point_x;
+        minfo.Wy_n = sei.payload.mastering_display_colour_volume.white_point_y;
+        minfo.max_luma_n =
+            sei.payload.
+            mastering_display_colour_volume.max_display_mastering_luminance;
+        minfo.min_luma_n =
+            sei.payload.
+            mastering_display_colour_volume.min_display_mastering_luminance;
+
+        minfo.Gx_d = minfo.Gy_d = minfo.Bx_d = minfo.By_d =
+            minfo.Rx_d = minfo.Ry_d = minfo.Wx_d = minfo.Wy_d = chroma_den;
+
+        minfo.max_luma_d = minfo.min_luma_d = luma_den;
+
+        GST_LOG_OBJECT (h265parse, "mastering display info found");
+        GST_LOG_OBJECT (h265parse, "\tRed  (%u/%u, %u/%u)", minfo.Rx_n,
+            minfo.Rx_d, minfo.Ry_n, minfo.Ry_d);
+        GST_LOG_OBJECT (h265parse, "\tGreen(%u/%u, %u/%u)", minfo.Gx_n,
+            minfo.Gx_d, minfo.Gy_n, minfo.Gy_d);
+        GST_LOG_OBJECT (h265parse, "\tBlue (%u/%u, %u/%u)", minfo.Bx_n,
+            minfo.Bx_d, minfo.By_n, minfo.By_d);
+        GST_LOG_OBJECT (h265parse, "\tWhite(%u/%u, %u/%u)", minfo.Wx_n,
+            minfo.Wx_d, minfo.Wy_n, minfo.Wy_d);
+        GST_LOG_OBJECT (h265parse,
+            "\tmax_luminance:(%u/%u), min_luminance:(%u/%u)",
+            minfo.max_luma_n, minfo.max_luma_d, minfo.min_luma_n,
+            minfo.min_luma_d);
+
+        if (h265parse->mastering_display_info_state ==
+            GST_H265_PARSE_SEI_EXPIRED) {
+          h265parse->update_caps = TRUE;
+        } else if (!gst_video_mastering_display_info_is_equal
+            (&h265parse->mastering_display_info, &minfo)) {
+          h265parse->update_caps = TRUE;
+        }
+
+        h265parse->mastering_display_info_state = GST_H265_PARSE_SEI_PARSED;
+        h265parse->mastering_display_info = minfo;
+
+        break;
+      }
+      case GST_H265_SEI_CONTENT_LIGHT_LEVEL:
+      {
+        GstVideoContentLightLevel cll;
+
+        cll.maxCLL_n = sei.payload.content_light_level.max_content_light_level;
+        cll.maxFALL_n =
+            sei.payload.content_light_level.max_pic_average_light_level;
+
+        cll.maxCLL_d = cll.maxFALL_d = 1;
+
+        GST_LOG_OBJECT (h265parse, "content light level found");
+        GST_LOG_OBJECT (h265parse,
+            "\tmaxCLL:(%u/%u), maxFALL:(%u/%u)", cll.maxCLL_n, cll.maxCLL_d,
+            cll.maxFALL_n, cll.maxFALL_d);
+
+        if (h265parse->content_light_level_state == GST_H265_PARSE_SEI_EXPIRED) {
+          h265parse->update_caps = TRUE;
+        } else if (gst_util_fraction_compare (cll.maxCLL_n, cll.maxCLL_d,
+                h265parse->content_light_level.maxCLL_n,
+                h265parse->content_light_level.maxCLL_d)
+            || gst_util_fraction_compare (cll.maxFALL_n, cll.maxFALL_d,
+                h265parse->content_light_level.maxFALL_n,
+                h265parse->content_light_level.maxFALL_d)) {
+          h265parse->update_caps = TRUE;
+        }
+
+        h265parse->content_light_level_state = GST_H265_PARSE_SEI_PARSED;
+        h265parse->content_light_level = cll;
+
+        break;
+      }
+      default:
         break;
     }
   }
@@ -561,7 +672,6 @@ gst_h265_parse_process_nal (GstH265Parse * h265parse, GstH265NalUnit * nalu)
   GstH265PPS pps = { 0, };
   GstH265SPS sps = { 0, };
   GstH265VPS vps = { 0, };
-  gboolean is_irap;
   guint nal_type;
   GstH265Parser *nalparser = h265parse->nalparser;
   GstH265ParserResult pres = GST_H265_PARSER_ERROR;
@@ -613,8 +723,16 @@ gst_h265_parse_process_nal (GstH265Parse * h265parse, GstH265NalUnit * nalu)
 
       /* arranged for a fallback sps.id, so use that one and only warn */
       if (pres != GST_H265_PARSER_OK) {
-        GST_WARNING_OBJECT (h265parse, "failed to parse SPS:");
-        return FALSE;
+        /* try to not parse VUI */
+        pres = gst_h265_parser_parse_sps (nalparser, nalu, &sps, FALSE);
+        if (pres != GST_H265_PARSER_OK) {
+          GST_WARNING_OBJECT (h265parse, "failed to parse SPS:");
+          h265parse->state |= GST_H265_PARSE_STATE_GOT_SPS;
+          h265parse->header |= TRUE;
+          return FALSE;
+        }
+        GST_WARNING_OBJECT (h265parse,
+            "failed to parse VUI of SPS, ignore VUI");
       }
 
       GST_DEBUG_OBJECT (h265parse, "triggering src caps check");
@@ -709,6 +827,8 @@ gst_h265_parse_process_nal (GstH265Parse * h265parse, GstH265NalUnit * nalu)
     case GST_H265_NAL_SLICE_CRA_NUT:
     {
       GstH265SliceHdr slice;
+      gboolean is_irap;
+      gboolean no_rasl_output_flag = FALSE;
 
       /* expected state: got-sps|got-pps (valid picture headers) */
       h265parse->state &= GST_H265_PARSE_STATE_VALID_PICTURE_HEADERS;
@@ -733,10 +853,33 @@ gst_h265_parse_process_nal (GstH265Parse * h265parse, GstH265NalUnit * nalu)
           pres, slice.first_slice_segment_in_pic_flag, slice.type);
 
       gst_h265_slice_hdr_free (&slice);
-    }
+
+      /* FIXME: NoRaslOutputFlag can be equal to 1 for CRA if
+       * 1) the first AU in bitstream is CRA
+       * 2) or the first AU following EOS nal is CRA
+       * 3) or it has HandleCraAsBlaFlag equal to 1 */
+      if (nal_type == GST_H265_NAL_SLICE_IDR_W_RADL ||
+          nal_type == GST_H265_NAL_SLICE_IDR_N_LP) {
+        /* NoRaslOutputFlag is equal to 1 for each IDR */
+        no_rasl_output_flag = TRUE;
+      } else if (nal_type == GST_H265_NAL_SLICE_BLA_W_LP ||
+          nal_type == GST_H265_NAL_SLICE_BLA_W_RADL ||
+          nal_type == GST_H265_NAL_SLICE_BLA_N_LP) {
+        /* NoRaslOutputFlag is equal to 1 for each BLA */
+        no_rasl_output_flag = TRUE;
+      }
 
       is_irap = ((nal_type >= GST_H265_NAL_SLICE_BLA_W_LP)
           && (nal_type <= GST_H265_NAL_SLICE_CRA_NUT)) ? TRUE : FALSE;
+
+      if (h265parse->mastering_display_info_state != GST_H265_PARSE_SEI_EXPIRED
+          && no_rasl_output_flag && is_irap)
+        h265parse->mastering_display_info_state--;
+
+      if (h265parse->content_light_level_state != GST_H265_PARSE_SEI_EXPIRED &&
+          no_rasl_output_flag && is_irap)
+        h265parse->content_light_level_state--;
+
       if (G_LIKELY (!is_irap && !h265parse->push_codec))
         break;
 
@@ -760,6 +903,7 @@ gst_h265_parse_process_nal (GstH265Parse * h265parse, GstH265NalUnit * nalu)
             h265parse->idr_pos);
       }
       break;
+    }
     case GST_H265_NAL_AUD:
       /* Just accumulate AU Delimiter, whether it's before SPS or not */
       pres = gst_h265_parser_parse_nal (nalparser, nalu);
@@ -1237,10 +1381,25 @@ gst_h265_parse_make_codec_data (GstH265Parse * h265parse)
       k++;
     }
   }
-  data[6] |=
-      (pft->progressive_source_flag << 7) | (pft->interlaced_source_flag << 6) |
-      (pft->non_packed_constraint_flag << 5) | (pft->
-      frame_only_constraint_flag << 4);
+
+  data[6] =
+      (pft->progressive_source_flag << 7) |
+      (pft->interlaced_source_flag << 6) |
+      (pft->non_packed_constraint_flag << 5) |
+      (pft->frame_only_constraint_flag << 4) |
+      (pft->max_12bit_constraint_flag << 3) |
+      (pft->max_10bit_constraint_flag << 2) |
+      (pft->max_8bit_constraint_flag << 1) |
+      (pft->max_422chroma_constraint_flag);
+
+  data[7] =
+      (pft->max_420chroma_constraint_flag << 7) |
+      (pft->max_monochrome_constraint_flag << 6) |
+      (pft->intra_constraint_flag << 5) |
+      (pft->one_picture_only_constraint_flag << 4) |
+      (pft->lower_bit_rate_constraint_flag << 3) |
+      (pft->max_14bit_constraint_flag << 2);
+
   data[12] = pft->level_idc;
   /* min_spatial_segmentation_idc */
   GST_WRITE_UINT16_BE (data + 13, min_spatial_segmentation_idc);
@@ -1360,6 +1519,8 @@ get_profile_string (GstH265Profile profile)
       return "main-still-picture";
     case GST_H265_PROFILE_MONOCHROME:
       return "monochrome";
+    case GST_H265_PROFILE_MONOCHROME_10:
+      return "monochrome-10";
     case GST_H265_PROFILE_MONOCHROME_12:
       return "monochrome-12";
     case GST_H265_PROFILE_MONOCHROME_16:
@@ -1398,6 +1559,44 @@ get_profile_string (GstH265Profile profile)
       return "main-444-still-picture";
     case GST_H265_PROFILE_MAIN_444_16_STILL_PICTURE:
       return "main-444-16-still-picture";
+    case GST_H265_PROFILE_HIGH_THROUGHPUT_444:
+      return "high-throughput-444";
+    case GST_H265_PROFILE_HIGH_THROUGHPUT_444_10:
+      return "high-throughput-444-10";
+    case GST_H265_PROFILE_HIGH_THROUGHPUT_444_14:
+      return "high-throughput-444-14";
+    case GST_H265_PROFILE_HIGH_THROUGHPUT_444_16_INTRA:
+      return "high-throughput-444-16-intra";
+    case GST_H265_PROFILE_SCREEN_EXTENDED_MAIN:
+      return "screen-extended-main";
+    case GST_H265_PROFILE_SCREEN_EXTENDED_MAIN_10:
+      return "screen-extended-main-10";
+    case GST_H265_PROFILE_SCREEN_EXTENDED_MAIN_444:
+      return "screen-extended-main-444";
+    case GST_H265_PROFILE_SCREEN_EXTENDED_MAIN_444_10:
+      return "screen-extended-main-444-10";
+    case GST_H265_PROFILE_SCREEN_EXTENDED_HIGH_THROUGHPUT_444:
+      return "screen-extended-high-throughput-444";
+    case GST_H265_PROFILE_SCREEN_EXTENDED_HIGH_THROUGHPUT_444_10:
+      return "screen-extended-high-throughput-444-10";
+    case GST_H265_PROFILE_SCREEN_EXTENDED_HIGH_THROUGHPUT_444_14:
+      return "screen-extended-high-throughput-444-14";
+    case GST_H265_PROFILE_MULTIVIEW_MAIN:
+      return "multiview-main";
+    case GST_H265_PROFILE_SCALABLE_MAIN:
+      return "scalable-main";
+    case GST_H265_PROFILE_SCALABLE_MAIN_10:
+      return "scalable-main-10";
+    case GST_H265_PROFILE_SCALABLE_MONOCHROME:
+      return "scalable-monochrome";
+    case GST_H265_PROFILE_SCALABLE_MONOCHROME_12:
+      return "scalable-monochrome-12";
+    case GST_H265_PROFILE_SCALABLE_MONOCHROME_16:
+      return "scalable-monochrome-16";
+    case GST_H265_PROFILE_SCALABLE_MAIN_444:
+      return "scalable-main-444";
+    case GST_H265_PROFILE_3D_MAIN:
+      return "3d-main";
     default:
       break;
   }
@@ -1568,6 +1767,7 @@ ensure_caps_profile (GstH265Parse * h265parse, GstCaps * caps, GstH265SPS * sps)
 static void
 gst_h265_parse_update_src_caps (GstH265Parse * h265parse, GstCaps * caps)
 {
+  GstH265VPS *vps;
   GstH265SPS *sps;
   GstCaps *sink_caps, *src_caps;
   gboolean modified = FALSE;
@@ -1595,6 +1795,8 @@ gst_h265_parse_update_src_caps (GstH265Parse * h265parse, GstCaps * caps)
 
   sps = h265parse->nalparser->last_sps;
   GST_DEBUG_OBJECT (h265parse, "sps: %p", sps);
+  vps = sps->vps;
+  GST_DEBUG_OBJECT (h265parse, "vps: %p", vps);
 
   /* only codec-data for nice-and-clean au aligned packetized hevc format */
   if ((h265parse->format == GST_H265_PARSE_FORMAT_HVC1
@@ -1643,7 +1845,8 @@ gst_h265_parse_update_src_caps (GstH265Parse * h265parse, GstCaps * caps)
     }
 
     /* 0/1 is set as the default in the codec parser */
-    if (sps->vui_params.timing_info_present_flag &&
+    if ((sps->vui_params.timing_info_present_flag ||
+            (vps && vps->timing_info_present_flag)) &&
         !(sps->fps_num == 0 && sps->fps_den == 1)) {
       if (G_UNLIKELY (h265parse->fps_num != sps->fps_num
               || h265parse->fps_den != sps->fps_den)) {
@@ -1695,9 +1898,13 @@ gst_h265_parse_update_src_caps (GstH265Parse * h265parse, GstCaps * caps)
 
       /* but not necessarily or reliably this */
       if (fps_num > 0 && fps_den > 0) {
+        GstStructure *s2;
         GST_INFO_OBJECT (h265parse, "setting framerate in caps");
         gst_caps_set_simple (caps, "framerate",
             GST_TYPE_FRACTION, fps_num, fps_den, NULL);
+        s2 = gst_caps_get_structure (caps, 0);
+        gst_structure_get_fraction (s2, "framerate", &h265parse->parsed_fps_n,
+            &h265parse->parsed_fps_d);
         gst_base_parse_set_frame_rate (GST_BASE_PARSE (h265parse),
             fps_num, fps_den, 0, 0);
         latency = gst_util_uint64_scale (GST_SECOND, fps_den, fps_num);
@@ -1735,6 +1942,8 @@ gst_h265_parse_update_src_caps (GstH265Parse * h265parse, GstCaps * caps)
 
   if (caps) {
     gint par_n, par_d;
+    const gchar *mastering_info_str;
+    const gchar *cll_str;
 
     gst_caps_set_simple (caps, "parsed", G_TYPE_BOOLEAN, TRUE,
         "stream-format", G_TYPE_STRING,
@@ -1770,6 +1979,32 @@ gst_h265_parse_update_src_caps (GstH265Parse * h265parse, GstCaps * caps)
 
       /* relax the profile constraint to find a suitable decoder */
       ensure_caps_profile (h265parse, caps, sps);
+    }
+
+    if (s
+        && (mastering_info_str =
+            gst_structure_get_string (s, "mastering-display-info"))) {
+      gst_caps_set_simple (caps, "mastering-display-info", G_TYPE_STRING,
+          mastering_info_str, NULL);
+    } else if (h265parse->mastering_display_info_state !=
+        GST_H265_PARSE_SEI_EXPIRED
+        &&
+        !gst_video_mastering_display_info_add_to_caps
+        (&h265parse->mastering_display_info, caps)) {
+      GST_WARNING_OBJECT (h265parse,
+          "Couldn't set mastering display info to caps");
+    }
+
+    if (s && (cll_str = gst_structure_get_string (s, "content-light-level"))) {
+      gst_caps_set_simple (caps, "content-light-level", G_TYPE_STRING, cll_str,
+          NULL);
+    } else if (h265parse->content_light_level_state !=
+        GST_H265_PARSE_SEI_EXPIRED
+        &&
+        !gst_video_content_light_level_add_to_caps
+        (&h265parse->content_light_level, caps)) {
+      GST_WARNING_OBJECT (h265parse,
+          "Couldn't set content light level to caps");
     }
 
     src_caps = gst_pad_get_current_caps (GST_BASE_PARSE_SRC_PAD (h265parse));
@@ -2204,6 +2439,81 @@ gst_h265_parse_pre_push_frame (GstBaseParse * parse, GstBaseParseFrame * frame)
       h265parse->have_sps = FALSE;
       h265parse->have_pps = FALSE;
       h265parse->state &= GST_H265_PARSE_STATE_VALID_PICTURE_HEADERS;
+    }
+  }
+
+  {
+    guint i = 0;
+
+    for (i = 0; i < h265parse->time_code.num_clock_ts; i++) {
+      GstVideoTimeCodeFlags flags = 0;
+      gint field_count = -1;
+      guint n_frames;
+
+      if (!h265parse->time_code.clock_timestamp_flag[i])
+        break;
+
+      h265parse->time_code.clock_timestamp_flag[i] = 0;
+
+      /* Table D.2 */
+      switch (h265parse->sei_pic_struct) {
+        case GST_H265_SEI_PIC_STRUCT_FRAME:
+        case GST_H265_SEI_PIC_STRUCT_TOP_FIELD:
+        case GST_H265_SEI_PIC_STRUCT_BOTTOM_FIELD:
+          field_count = h265parse->sei_pic_struct;
+          break;
+        case GST_H265_SEI_PIC_STRUCT_TOP_BOTTOM:
+        case GST_H265_SEI_PIC_STRUCT_TOP_PAIRED_PREVIOUS_BOTTOM:
+        case GST_H265_SEI_PIC_STRUCT_TOP_PAIRED_NEXT_BOTTOM:
+          field_count = i + 1;
+          break;
+        case GST_H265_SEI_PIC_STRUCT_BOTTOM_TOP:
+        case GST_H265_SEI_PIC_STRUCT_BOTTOM_PAIRED_PREVIOUS_TOP:
+        case GST_H265_SEI_PIC_STRUCT_BOTTOM_PAIRED_NEXT_TOP:
+          field_count = 2 - i;
+          break;
+        case GST_H265_SEI_PIC_STRUCT_TOP_BOTTOM_TOP:
+          field_count = i % 2 ? 2 : 1;
+          break;
+        case GST_H265_SEI_PIC_STRUCT_BOTTOM_TOP_BOTTOM:
+          field_count = i % 2 ? 1 : 2;
+          break;
+        case GST_H265_SEI_PIC_STRUCT_FRAME_DOUBLING:
+        case GST_H265_SEI_PIC_STRUCT_FRAME_TRIPLING:
+          field_count = 0;
+          break;
+      }
+
+      if (field_count == -1) {
+        GST_WARNING_OBJECT (parse,
+            "failed to determine field count for timecode");
+        field_count = 0;
+      }
+
+      /* Dropping of the two lowest (value 0 and 1) n_frames[ i ] counts when
+       * seconds_value[ i ] is equal to 0 and minutes_value[ i ] is not an integer
+       * multiple of 10 */
+      if (h265parse->time_code.counting_type[i] == 4)
+        flags |= GST_VIDEO_TIME_CODE_FLAGS_DROP_FRAME;
+
+      if (h265parse->sei_pic_struct != GST_H265_SEI_PIC_STRUCT_FRAME)
+        flags |= GST_VIDEO_TIME_CODE_FLAGS_INTERLACED;
+
+      n_frames =
+          gst_util_uint64_scale_int (h265parse->time_code.n_frames[i], 1,
+          2 - h265parse->time_code.units_field_based_flag[i]);
+
+      gst_buffer_add_video_time_code_meta_full (buffer,
+          h265parse->parsed_fps_n,
+          h265parse->parsed_fps_d,
+          NULL,
+          flags,
+          h265parse->time_code.hours_flag[i] ? h265parse->
+          time_code.hours_value[i] : 0,
+          h265parse->time_code.minutes_flag[i] ? h265parse->
+          time_code.minutes_value[i] : 0,
+          h265parse->time_code.seconds_flag[i] ? h265parse->
+          time_code.seconds_value[i] : 0, n_frames, field_count);
     }
   }
 

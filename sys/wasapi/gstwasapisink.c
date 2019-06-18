@@ -147,7 +147,7 @@ gst_wasapi_sink_class_init (GstWasapiSinkClass * klass)
 
   gst_element_class_add_static_pad_template (gstelement_class, &sink_template);
   gst_element_class_set_static_metadata (gstelement_class, "WasapiSrc",
-      "Sink/Audio",
+      "Sink/Audio/Hardware",
       "Stream audio to an audio capture device through WASAPI",
       "Nirbheek Chauhan <nirbheek@centricular.com>, "
       "Ole André Vadla Ravnås <ole.andre.ravnas@tandberg.com>");
@@ -458,7 +458,7 @@ gst_wasapi_sink_get_can_frames (GstWasapiSink * self)
 
   /* Frames the card hasn't rendered yet */
   hr = IAudioClient_GetCurrentPadding (self->client, &n_frames_padding);
-  HR_FAILED_RET (hr, IAudioClient::GetCurrentPadding, -1);
+  HR_FAILED_ELEMENT_ERROR_RET (hr, IAudioClient::GetCurrentPadding, self, -1);
 
   GST_DEBUG_OBJECT (self, "%i unread frames (padding)", n_frames_padding);
 
@@ -557,6 +557,7 @@ gst_wasapi_sink_prepare (GstAudioSink * asink, GstAudioRingBufferSpec * spec)
 
   hr = IAudioClient_Start (self->client);
   HR_FAILED_GOTO (hr, IAudioClient::Start, beach);
+  self->client_needs_restart = FALSE;
 
   gst_audio_ring_buffer_set_channel_positions (GST_AUDIO_BASE_SINK
       (self)->ringbuffer, self->positions);
@@ -576,8 +577,6 @@ static gboolean
 gst_wasapi_sink_unprepare (GstAudioSink * asink)
 {
   GstWasapiSink *self = GST_WASAPI_SINK (asink);
-
-  CoUninitialize ();
 
   if (self->client != NULL) {
     IAudioClient_Stop (self->client);
@@ -605,8 +604,8 @@ gst_wasapi_sink_write (GstAudioSink * asink, gpointer data, guint length)
   GST_OBJECT_LOCK (self);
   if (self->client_needs_restart) {
     hr = IAudioClient_Start (self->client);
-    HR_FAILED_AND (hr, IAudioClient::Start, GST_OBJECT_UNLOCK (self);
-        goto beach);
+    HR_FAILED_ELEMENT_ERROR_AND (hr, IAudioClient::Start, self,
+        GST_OBJECT_UNLOCK (self); goto err);
     self->client_needs_restart = FALSE;
   }
   GST_OBJECT_UNLOCK (self);
@@ -620,32 +619,43 @@ gst_wasapi_sink_write (GstAudioSink * asink, gpointer data, guint length)
     if (dwWaitResult != WAIT_OBJECT_0) {
       GST_ERROR_OBJECT (self, "Error waiting for event handle: %x",
           (guint) dwWaitResult);
-      goto beach;
+      goto err;
     }
 
     can_frames = gst_wasapi_sink_get_can_frames (self);
+    if (can_frames < 0) {
+      GST_ERROR_OBJECT (self, "Error getting frames to write to");
+      goto err;
+    }
     /* In exclusive mode we need to fill the whole buffer in one go or
      * GetBuffer will error out */
     if (can_frames != have_frames) {
       GST_ERROR_OBJECT (self,
           "Need at %i frames to write for exclusive mode, but got %i",
           can_frames, have_frames);
-      written_len = -1;
-      goto beach;
+      goto err;
     }
   } else {
     /* In shared mode we can write parts of the buffer, so only wait
      * in case we can't write anything */
     can_frames = gst_wasapi_sink_get_can_frames (self);
+    if (can_frames < 0) {
+      GST_ERROR_OBJECT (self, "Error getting frames to write to");
+      goto err;
+    }
 
     if (can_frames == 0) {
       dwWaitResult = WaitForSingleObject (self->event_handle, INFINITE);
       if (dwWaitResult != WAIT_OBJECT_0) {
         GST_ERROR_OBJECT (self, "Error waiting for event handle: %x",
             (guint) dwWaitResult);
-        goto beach;
+        goto err;
       }
       can_frames = gst_wasapi_sink_get_can_frames (self);
+      if (can_frames < 0) {
+        GST_ERROR_OBJECT (self, "Error getting frames to write to");
+        goto err;
+      }
     }
   }
 
@@ -659,19 +669,24 @@ gst_wasapi_sink_write (GstAudioSink * asink, gpointer data, guint length)
 
   hr = IAudioRenderClient_GetBuffer (self->render_client, n_frames,
       (BYTE **) & dst);
-  HR_FAILED_AND (hr, IAudioRenderClient::GetBuffer, goto beach);
+  HR_FAILED_ELEMENT_ERROR_AND (hr, IAudioRenderClient::GetBuffer, self,
+      goto err);
 
   memcpy (dst, data, write_len);
 
   hr = IAudioRenderClient_ReleaseBuffer (self->render_client, n_frames,
       self->mute ? AUDCLNT_BUFFERFLAGS_SILENT : 0);
-  HR_FAILED_AND (hr, IAudioRenderClient::ReleaseBuffer, goto beach);
+  HR_FAILED_ELEMENT_ERROR_AND (hr, IAudioRenderClient::ReleaseBuffer, self,
+      goto err);
 
   written_len = write_len;
 
-beach:
-
+out:
   return written_len;
+
+err:
+  written_len = -1;
+  goto out;
 }
 
 static guint

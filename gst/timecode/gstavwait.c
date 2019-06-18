@@ -402,30 +402,42 @@ gst_avwait_get_property (GObject * object, guint prop_id,
 
   switch (prop_id) {
     case PROP_TARGET_TIME_CODE_STRING:{
+      g_mutex_lock (&self->mutex);
       if (self->tc)
         g_value_take_string (value, gst_video_time_code_to_string (self->tc));
       else
         g_value_set_string (value, DEFAULT_TARGET_TIMECODE_STR);
+      g_mutex_unlock (&self->mutex);
       break;
     }
     case PROP_TARGET_TIME_CODE:{
+      g_mutex_lock (&self->mutex);
       g_value_set_boxed (value, self->tc);
+      g_mutex_unlock (&self->mutex);
       break;
     }
     case PROP_END_TIME_CODE:{
+      g_mutex_lock (&self->mutex);
       g_value_set_boxed (value, self->end_tc);
+      g_mutex_unlock (&self->mutex);
       break;
     }
     case PROP_TARGET_RUNNING_TIME:{
+      g_mutex_lock (&self->mutex);
       g_value_set_uint64 (value, self->target_running_time);
+      g_mutex_unlock (&self->mutex);
       break;
     }
     case PROP_RECORDING:{
+      g_mutex_lock (&self->mutex);
       g_value_set_boolean (value, self->recording);
+      g_mutex_unlock (&self->mutex);
       break;
     }
     case PROP_MODE:{
+      g_mutex_lock (&self->mutex);
       g_value_set_enum (value, self->mode);
+      g_mutex_unlock (&self->mutex);
       break;
     }
     default:
@@ -459,84 +471,50 @@ gst_avwait_set_property (GObject * object, guint prop_id,
       minutes = g_ascii_strtoll (parts[1], NULL, 10);
       seconds = g_ascii_strtoll (parts[2], NULL, 10);
       frames = g_ascii_strtoll (parts[3], NULL, 10);
-      gst_video_time_code_init (self->tc, 0, 1, NULL, 0, hours, minutes,
-          seconds, frames, 0);
-      if (self->end_tc
-          && gst_video_time_code_compare (self->tc, self->end_tc) != -1) {
-        gchar *end_tc;
-
-        end_tc = gst_video_time_code_to_string (self->end_tc);
-        g_warning
-            ("ERROR: End timecode %s must be after start timecode %s. Start timecode rejected",
-            end_tc, tc_str);
+      g_mutex_lock (&self->mutex);
+      if (self->tc)
         gst_video_time_code_free (self->tc);
-        g_free (end_tc);
-        self->tc = gst_video_time_code_new_empty ();
-      } else {
-        if (GST_VIDEO_INFO_FORMAT (&self->vinfo) != GST_VIDEO_FORMAT_UNKNOWN
-            && self->vinfo.fps_n != 0) {
-          self->tc->config.fps_n = self->vinfo.fps_n;
-          self->tc->config.fps_d = self->vinfo.fps_d;
-        }
+      self->tc = gst_video_time_code_new (0, 1, NULL, 0, hours, minutes,
+          seconds, frames, 0);
+      if (GST_VIDEO_INFO_FORMAT (&self->vinfo) != GST_VIDEO_FORMAT_UNKNOWN
+          && self->vinfo.fps_n != 0) {
+        self->tc->config.fps_n = self->vinfo.fps_n;
+        self->tc->config.fps_d = self->vinfo.fps_d;
       }
+      g_mutex_unlock (&self->mutex);
       g_strfreev (parts);
       break;
     }
     case PROP_TARGET_TIME_CODE:{
+      g_mutex_lock (&self->mutex);
       if (self->tc)
         gst_video_time_code_free (self->tc);
       self->tc = g_value_dup_boxed (value);
-      if (self->end_tc
-          && gst_video_time_code_compare (self->tc, self->end_tc) != -1) {
-        gchar *start_tc, *end_tc;
-
-        start_tc = gst_video_time_code_to_string (self->tc);
-        end_tc = gst_video_time_code_to_string (self->end_tc);
-        g_warning
-            ("ERROR: End timecode %s must be after start timecode %s. Start timecode rejected",
-            end_tc, start_tc);
-        gst_video_time_code_free (self->tc);
-        g_free (start_tc);
-        g_free (end_tc);
-        self->tc = gst_video_time_code_new_empty ();
-      } else {
-        if (self->tc->config.fps_n == 0
-            && GST_VIDEO_INFO_FORMAT (&self->vinfo) !=
-            GST_VIDEO_FORMAT_UNKNOWN && self->vinfo.fps_n != 0) {
-          self->tc->config.fps_n = self->vinfo.fps_n;
-          self->tc->config.fps_d = self->vinfo.fps_d;
-        }
+      if (self->tc && self->tc->config.fps_n == 0
+          && GST_VIDEO_INFO_FORMAT (&self->vinfo) !=
+          GST_VIDEO_FORMAT_UNKNOWN && self->vinfo.fps_n != 0) {
+        self->tc->config.fps_n = self->vinfo.fps_n;
+        self->tc->config.fps_d = self->vinfo.fps_d;
       }
+      g_mutex_unlock (&self->mutex);
       break;
     }
     case PROP_END_TIME_CODE:{
+      g_mutex_lock (&self->mutex);
       if (self->end_tc)
         gst_video_time_code_free (self->end_tc);
       self->end_tc = g_value_dup_boxed (value);
-      if (self->tc && self->end_tc
-          && gst_video_time_code_compare (self->tc, self->end_tc) != -1) {
-        gchar *start_tc, *end_tc;
-
-        start_tc = gst_video_time_code_to_string (self->tc);
-        end_tc = gst_video_time_code_to_string (self->end_tc);
-        g_warning
-            ("ERROR: End timecode %s must be after start timecode %s. End timecode rejected",
-            end_tc, start_tc);
-        gst_video_time_code_free (self->end_tc);
-        self->end_tc = NULL;
-        g_free (start_tc);
-        g_free (end_tc);
-      } else if (self->end_tc) {
-        if (self->end_tc->config.fps_n == 0
-            && GST_VIDEO_INFO_FORMAT (&self->vinfo) !=
-            GST_VIDEO_FORMAT_UNKNOWN && self->vinfo.fps_n != 0) {
-          self->end_tc->config.fps_n = self->vinfo.fps_n;
-          self->end_tc->config.fps_d = self->vinfo.fps_d;
-        }
+      if (self->end_tc && self->end_tc->config.fps_n == 0
+          && GST_VIDEO_INFO_FORMAT (&self->vinfo) !=
+          GST_VIDEO_FORMAT_UNKNOWN && self->vinfo.fps_n != 0) {
+        self->end_tc->config.fps_n = self->vinfo.fps_n;
+        self->end_tc->config.fps_d = self->vinfo.fps_d;
       }
+      g_mutex_unlock (&self->mutex);
       break;
     }
     case PROP_TARGET_RUNNING_TIME:{
+      g_mutex_lock (&self->mutex);
       self->target_running_time = g_value_get_uint64 (value);
       if (self->mode == MODE_RUNNING_TIME) {
         self->running_time_to_wait_for = self->target_running_time;
@@ -547,10 +525,14 @@ gst_avwait_set_property (GObject * object, guint prop_id,
           self->dropping = TRUE;
         }
       }
+      g_mutex_unlock (&self->mutex);
       break;
     }
     case PROP_MODE:{
-      GstAvWaitMode old_mode = self->mode;
+      GstAvWaitMode old_mode;
+
+      g_mutex_lock (&self->mutex);
+      old_mode = self->mode;
       self->mode = g_value_get_enum (value);
       if (self->mode != old_mode) {
         switch (self->mode) {
@@ -579,6 +561,7 @@ gst_avwait_set_property (GObject * object, guint prop_id,
             break;
         }
       }
+      g_mutex_unlock (&self->mutex);
       break;
     }
     case PROP_RECORDING:{
@@ -660,11 +643,12 @@ gst_avwait_vsink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       GstCaps *caps;
       gst_event_parse_caps (event, &caps);
       GST_DEBUG_OBJECT (self, "Got caps %" GST_PTR_FORMAT, caps);
+      g_mutex_lock (&self->mutex);
       if (!gst_video_info_from_caps (&self->vinfo, caps)) {
         gst_event_unref (event);
+        g_mutex_unlock (&self->mutex);
         return FALSE;
       }
-      g_mutex_lock (&self->mutex);
       if (self->tc && self->tc->config.fps_n == 0 && self->vinfo.fps_n != 0) {
         self->tc->config.fps_n = self->vinfo.fps_n;
         self->tc->config.fps_d = self->vinfo.fps_d;
@@ -696,6 +680,7 @@ gst_avwait_asink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       if (self->asegment.format != GST_FORMAT_TIME) {
         GST_ERROR_OBJECT (self, "Invalid segment format");
         g_mutex_unlock (&self->mutex);
+        gst_event_unref (event);
         return FALSE;
       }
       self->asegment.position = GST_CLOCK_TIME_NONE;
@@ -728,6 +713,7 @@ gst_avwait_asink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       g_mutex_lock (&self->mutex);
       if (!gst_audio_info_from_caps (&self->ainfo, caps)) {
         g_mutex_unlock (&self->mutex);
+        gst_event_unref (event);
         return FALSE;
       }
       g_mutex_unlock (&self->mutex);
@@ -756,6 +742,7 @@ gst_avwait_vsink_chain (GstPad * pad, GstObject * parent, GstBuffer * inbuf)
     gst_buffer_unref (inbuf);
     return GST_FLOW_ERROR;
   }
+
   g_mutex_lock (&self->mutex);
   self->vsegment.position = timestamp;
   running_time =
@@ -771,22 +758,42 @@ gst_avwait_vsink_chain (GstPad * pad, GstObject * parent, GstBuffer * inbuf)
     }
     self->last_seen_tc = tc;
   }
+
   while (self->mode == MODE_VIDEO_FIRST
       && self->first_audio_running_time == GST_CLOCK_TIME_NONE
       && !self->audio_eos_flag
       && !self->shutdown_flag && !self->video_flush_flag) {
     g_cond_wait (&self->audio_cond, &self->mutex);
   }
+
   if (self->video_flush_flag || self->shutdown_flag) {
     GST_DEBUG_OBJECT (self, "Shutting down, ignoring buffer");
     gst_buffer_unref (inbuf);
     g_mutex_unlock (&self->mutex);
     return GST_FLOW_FLUSHING;
   }
+
   switch (self->mode) {
     case MODE_TIMECODE:{
+      if (self->tc && self->end_tc
+          && gst_video_time_code_compare (self->tc, self->end_tc) != -1) {
+        gchar *tc_str, *end_tc;
+
+        tc_str = gst_video_time_code_to_string (self->tc);
+        end_tc = gst_video_time_code_to_string (self->end_tc);
+        GST_ELEMENT_ERROR (self, LIBRARY, SETTINGS, (NULL),
+            ("End timecode %s must be after start timecode %s. Start timecode rejected",
+                end_tc, tc_str));
+        g_free (end_tc);
+        g_free (tc_str);
+        gst_buffer_unref (inbuf);
+        g_mutex_unlock (&self->mutex);
+        return GST_FLOW_ERROR;
+      }
+
       if (self->tc != NULL && tc != NULL) {
         gboolean emit_passthrough_signal = FALSE;
+
         if (gst_video_time_code_compare (tc, self->tc) < 0
             && self->running_time_to_wait_for == GST_CLOCK_TIME_NONE) {
           GST_DEBUG_OBJECT (self, "Timecode not yet reached, ignoring frame");
@@ -807,6 +814,7 @@ gst_avwait_vsink_chain (GstPad * pad, GstObject * parent, GstBuffer * inbuf)
                 self->running_time_to_wait_for;
           }
         }
+
         if (self->end_tc && gst_video_time_code_compare (tc, self->end_tc) >= 0) {
           if (self->running_time_to_end_at == GST_CLOCK_TIME_NONE) {
             GST_INFO_OBJECT (self, "End timecode reached at %" GST_TIME_FORMAT,
@@ -932,12 +940,14 @@ gst_avwait_vsink_chain (GstPad * pad, GstObject * parent, GstBuffer * inbuf)
     self->was_recording = self->recording;
   g_cond_signal (&self->cond);
   g_mutex_unlock (&self->mutex);
+
   if (inbuf) {
-    GST_WARNING_OBJECT (self, "Pass video buffer ending at %" GST_TIME_FORMAT,
+    GST_DEBUG_OBJECT (self, "Pass video buffer ending at %" GST_TIME_FORMAT,
         GST_TIME_ARGS (GST_BUFFER_TIMESTAMP (inbuf) +
             GST_BUFFER_DURATION (inbuf)));
     ret = gst_pad_push (self->vsrcpad, inbuf);
   }
+
   g_mutex_lock (&self->mutex);
   if (self->must_send_end_message & END_MESSAGE_AUDIO_PUSHED) {
     self->must_send_end_message = END_MESSAGE_NORMAL;
@@ -999,6 +1009,7 @@ gst_avwait_asink_chain (GstPad * pad, GstObject * parent, GstBuffer * inbuf)
     gst_buffer_unref (inbuf);
     return GST_FLOW_ERROR;
   }
+
   g_mutex_lock (&self->mutex);
   self->asegment.position = timestamp;
   asign =
@@ -1010,9 +1021,11 @@ gst_avwait_asink_chain (GstPad * pad, GstObject * parent, GstBuffer * inbuf)
     GST_ERROR_OBJECT (self, "Could not get current running time");
     return GST_FLOW_ERROR;
   }
+
   if (self->first_audio_running_time == GST_CLOCK_TIME_NONE) {
     self->first_audio_running_time = current_running_time;
   }
+
   g_cond_signal (&self->audio_cond);
   if (self->vsegment.format == GST_FORMAT_TIME) {
     vsign =
@@ -1022,6 +1035,7 @@ gst_avwait_asink_chain (GstPad * pad, GstObject * parent, GstBuffer * inbuf)
       video_running_time = GST_CLOCK_TIME_NONE;
     }
   }
+
   duration =
       gst_util_uint64_scale (gst_buffer_get_size (inbuf) / self->ainfo.bpf,
       GST_SECOND, self->ainfo.rate);
@@ -1036,6 +1050,7 @@ gst_avwait_asink_chain (GstPad * pad, GstObject * parent, GstBuffer * inbuf)
       return GST_FLOW_ERROR;
     }
   }
+
   while (!(self->video_eos_flag || self->audio_flush_flag
           || self->shutdown_flag) &&
       /* Start at timecode */
@@ -1052,12 +1067,14 @@ gst_avwait_asink_chain (GstPad * pad, GstObject * parent, GstBuffer * inbuf)
       video_running_time = GST_CLOCK_TIME_NONE;
     }
   }
+
   if (self->audio_flush_flag || self->shutdown_flag) {
     GST_DEBUG_OBJECT (self, "Shutting down, ignoring frame");
     gst_buffer_unref (inbuf);
     g_mutex_unlock (&self->mutex);
     return GST_FLOW_FLUSHING;
   }
+
   if (self->audio_running_time_to_wait_for == GST_CLOCK_TIME_NONE
       /* Audio ends before start : drop */
       || gst_avwait_compare_guint64_with_signs (esign,
@@ -1079,7 +1096,6 @@ gst_avwait_asink_chain (GstPad * pad, GstObject * parent, GstBuffer * inbuf)
         !(self->must_send_end_message & END_MESSAGE_AUDIO_PUSHED)) {
       send_element_message = TRUE;
     }
-
   } else if (gst_avwait_compare_guint64_with_signs (esign, running_time_at_end,
           1, self->audio_running_time_to_wait_for) >= 0
       && gst_avwait_compare_guint64_with_signs (esign, running_time_at_end, 1,
@@ -1124,6 +1140,7 @@ gst_avwait_asink_chain (GstPad * pad, GstObject * parent, GstBuffer * inbuf)
     g_assert_not_reached ();
   }
   g_mutex_unlock (&self->mutex);
+
   if (inbuf) {
     GstClockTime new_duration =
         gst_util_uint64_scale (gst_buffer_get_size (inbuf) / self->ainfo.bpf,
@@ -1131,10 +1148,11 @@ gst_avwait_asink_chain (GstPad * pad, GstObject * parent, GstBuffer * inbuf)
     GstClockTime new_running_time_at_end =
         gst_segment_to_running_time (&self->asegment, GST_FORMAT_TIME,
         self->asegment.position + new_duration);
-    GST_WARNING_OBJECT (self, "Pass audio buffer ending at %" GST_TIME_FORMAT,
+    GST_DEBUG_OBJECT (self, "Pass audio buffer ending at %" GST_TIME_FORMAT,
         GST_TIME_ARGS (new_running_time_at_end));
     ret = gst_pad_push (self->asrcpad, inbuf);
   }
+
   if (send_element_message) {
     g_mutex_lock (&self->mutex);
     if ((self->must_send_end_message & END_MESSAGE_VIDEO_PUSHED) ||
@@ -1148,6 +1166,7 @@ gst_avwait_asink_chain (GstPad * pad, GstObject * parent, GstBuffer * inbuf)
       g_mutex_unlock (&self->mutex);
     } else {
       g_assert_not_reached ();
+      g_mutex_unlock (&self->mutex);
     }
   }
   send_element_message = FALSE;

@@ -58,12 +58,12 @@
  * For each packet received, it checks if the internal SSRC is in the list
  * of streams already in use. If this is not the case, it sends a signal to
  * the user to get the needed parameters to create a new stream : master
- * key, encryption and authentication mecanisms for both RTP and RTCP. If
+ * key, encryption and authentication mechanisms for both RTP and RTCP. If
  * the user can't provide those parameters, the buffer is dropped and a
  * warning is emitted.
  *
  * This element uses libsrtp library. The encryption and authentication
- * mecanisms available are :
+ * mechanisms available are :
  *
  * Encryption
  * - AES_ICM 256 bits (maximum security)
@@ -583,8 +583,13 @@ get_stream_from_caps (GstSrtpDec * filter, GstCaps * caps, guint32 ssrc)
     goto error;
   }
 
-  if (stream->rtcp_cipher != SRTP_NULL_CIPHER &&
-      stream->rtcp_auth == SRTP_NULL_AUTH) {
+  /* RFC 3711 says in "3. SRTP Framework" that SRTCP message authentication
+   * is MANDATORY. In case of GCM let the pipeline handle any errors.
+   */
+  if (stream->rtcp_cipher != GST_SRTP_CIPHER_AES_128_GCM
+      && stream->rtcp_cipher != GST_SRTP_CIPHER_AES_256_GCM
+      && stream->rtcp_cipher != GST_SRTP_CIPHER_NULL
+      && stream->rtcp_auth == GST_SRTP_AUTH_NULL) {
     GST_WARNING_OBJECT (filter,
         "Cannot have SRTP NULL authentication with a not-NULL encryption"
         " cipher.");
@@ -930,6 +935,7 @@ update_session_stream_from_caps (GstSrtpDec * filter, guint32 ssrc,
     err = init_session_stream (filter, ssrc, stream);
 
     if (err != srtp_err_status_ok) {
+      GST_WARNING_OBJECT (filter, "Failed to create the stream (err: %d)", err);
       if (stream->key)
         gst_buffer_unref (stream->key);
       g_slice_free (GstSrtpDecSsrcStream, stream);
@@ -1382,55 +1388,56 @@ unprotect:
 #endif
   }
 
-  GST_OBJECT_UNLOCK (filter);
+  /* Signal user depending on type of error */
+  switch (err) {
+    case srtp_err_status_ok:
+      /* success! */
+      break;
+    case srtp_err_status_replay_fail:
+      GST_INFO_OBJECT (filter,
+          "Dropping replayed packet, probably retransmission");
+      goto err;
+    case srtp_err_status_key_expired:{
+      GstSrtpDecSsrcStream *stream;
 
-  if (err != srtp_err_status_ok) {
-    GST_WARNING_OBJECT (pad,
-        "Unable to unprotect buffer (unprotect failed code %d)", err);
+      /* Check we have an existing stream to rekey */
+      stream = find_stream_by_ssrc (filter, ssrc);
+      if (stream == NULL) {
+        GST_WARNING_OBJECT (filter, "Could not find matching stream, dropping");
+        goto err;
+      }
 
-    /* Signal user depending on type of error */
-    switch (err) {
-      case srtp_err_status_key_expired:
-        GST_OBJECT_LOCK (filter);
+      GST_OBJECT_UNLOCK (filter);
+      stream = request_key_with_signal (filter, ssrc, SIGNAL_HARD_LIMIT);
+      GST_OBJECT_LOCK (filter);
 
-        /* Update stream */
-        if (find_stream_by_ssrc (filter, ssrc)) {
-          GST_OBJECT_UNLOCK (filter);
-          if (request_key_with_signal (filter, ssrc, SIGNAL_HARD_LIMIT)) {
-            GST_OBJECT_LOCK (filter);
-            goto unprotect;
-          } else {
-            GST_WARNING_OBJECT (filter, "Hard limit reached, no new key, "
-                "dropping");
-          }
-        } else {
-          GST_WARNING_OBJECT (filter, "Could not find matching stream, "
-              "dropping");
-        }
-        break;
-      case srtp_err_status_auth_fail:
-        GST_WARNING_OBJECT (filter, "Error authentication packet, dropping");
-        break;
-      case srtp_err_status_cipher_fail:
-        GST_WARNING_OBJECT (filter, "Error while decrypting packet, dropping");
-        break;
-      default:
-        GST_WARNING_OBJECT (filter, "Other error, dropping");
-        break;
+      /* Check the key request created a new stream */
+      if (stream == NULL) {
+        GST_WARNING_OBJECT (filter, "Hard limit reached, no new key, dropping");
+        goto err;
+      }
+
+      goto unprotect;
     }
-
-    gst_buffer_unmap (buf, &map);
-
-    GST_OBJECT_LOCK (filter);
-    return FALSE;
+    case srtp_err_status_auth_fail:
+      GST_WARNING_OBJECT (filter, "Error authentication packet, dropping");
+      goto err;
+    case srtp_err_status_cipher_fail:
+      GST_WARNING_OBJECT (filter, "Error while decrypting packet, dropping");
+      goto err;
+    default:
+      GST_WARNING_OBJECT (pad,
+          "Unable to unprotect buffer (unprotect failed code %d)", err);
+      goto err;
   }
 
   gst_buffer_unmap (buf, &map);
-
   gst_buffer_set_size (buf, size);
-
-  GST_OBJECT_LOCK (filter);
   return TRUE;
+
+err:
+  gst_buffer_unmap (buf, &map);
+  return FALSE;
 }
 
 static GstFlowReturn

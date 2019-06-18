@@ -6,8 +6,8 @@ if not gstgl_dep.found()
   subdir_done()
 endif
 
-wpe_dep = dependency('wpe-webkit-0.1', required : get_option('wpe'))
-wpe_fdo_dep = dependency('wpebackend-fdo-0.1', required : get_option('wpe'))
+wpe_dep = dependency('wpe-webkit-1.0', version : '>= 2.24', required : get_option('wpe'))
+wpe_fdo_dep = dependency('wpebackend-fdo-1.0', required : get_option('wpe'))
 egl_dep = dependency('egl', required : get_option('wpe'))
 xkbcommon_dep = dependency('xkbcommon', version : '>= 0.8', required : get_option('wpe'))
 
@@ -23,3 +23,4 @@ gstwpe = library('gstwpe',
   install : true,
   install_dir : plugins_install_dir)
 pkgconfig.generate(gstwpe, install_dir : plugins_pkgconfig_install_dir)
+plugins += [gstwpe]

@@ -3,7 +3,7 @@ AC_PREREQ([2.69])
 dnl initialize autoconf
 dnl when going to/from release please set the nano (fourth number) right !
 dnl releases only do Wall, git and prerelease does Werror too
-AC_INIT([GStreamer Bad Plug-ins],[1.15.0.1],[http://bugzilla.gnome.org/enter_bug.cgi?product=GStreamer],[gst-plugins-bad])
+AC_INIT([GStreamer Bad Plug-ins],[1.17.0.1],[http://bugzilla.gnome.org/enter_bug.cgi?product=GStreamer],[gst-plugins-bad])
 
 AG_GST_INIT
 
@@ -17,7 +17,7 @@ dnl check if this is a release version
 AS_NANO(GST_GIT="no", GST_GIT="yes")
 
 dnl can autoconf find the source ?
-AC_CONFIG_SRCDIR([docs/plugins/gst-plugins-bad-plugins-docs.sgml])
+AC_CONFIG_SRCDIR([gst/aiff/aiff.c])
 
 dnl define the output header for config
 AC_CONFIG_HEADERS([config.h])
@@ -51,11 +51,11 @@ dnl - interfaces added/removed/changed -> increment CURRENT, REVISION = 0
 dnl - interfaces added -> increment AGE
 dnl - interfaces removed -> AGE = 0
 dnl sets GST_LT_LDFLAGS
-AS_LIBTOOL(GST, 1500, 0, 1500)
+AS_LIBTOOL(GST, 1700, 0, 1700)
 
 dnl *** required versions of GStreamer stuff ***
-GST_REQ=1.15.0.1
-GSTPB_REQ=1.15.0.1
+GST_REQ=1.17.0.1
+GSTPB_REQ=1.17.0.1
 
 dnl *** autotools stuff ****
 
@@ -138,10 +138,6 @@ AM_CONDITIONAL(HAVE_VALGRIND, test ! "x$VALGRIND_PATH" = "xno")
 dnl check for gobject-introspection
 GOBJECT_INTROSPECTION_CHECK([1.31.1])
 
-dnl check for documentation tools
-GTK_DOC_CHECK([1.12])
-AG_GST_PLUGIN_DOCS([1.12])
-
 dnl *** checks for libraries ***
 
 dnl check for libm, for sin() etc.
@@ -189,7 +185,7 @@ AC_CHECK_FUNC(socket,,[AC_CHECK_LIB(socket,socket)])
 AC_CHECK_FUNC(gethostbyname,,[AC_CHECK_LIB(nsl,gethostbyname)])
 
 dnl GLib is required
-GLIB_REQ=2.40.0
+GLIB_REQ=2.44.0
 AG_GST_GLIB_CHECK([$GLIB_REQ])
 
 dnl Needed by plugins that use g_module_*() API
@@ -478,6 +474,8 @@ AG_GST_CHECK_PLUGIN(pnm)
 AG_GST_CHECK_PLUGIN(proxy)
 AG_GST_CHECK_PLUGIN(rawparse)
 AG_GST_CHECK_PLUGIN(removesilence)
+AG_GST_CHECK_PLUGIN(rist)
+AG_GST_CHECK_PLUGIN(rtp)
 AG_GST_CHECK_PLUGIN(sdp)
 AG_GST_CHECK_PLUGIN(segmentclip)
 AG_GST_CHECK_PLUGIN(siren)
@@ -533,55 +531,6 @@ if test "x$HAVE_WINSOCK2_H" = "xyes"; then
   WINSOCK2_LIBS="-lws2_32"
   AC_SUBST(WINSOCK2_LIBS)
 fi
-
-dnl Vulkan
-PKG_CHECK_MODULES(XCB, xcb >= 1.10, GST_VULKAN_HAVE_WINDOW_XCB=1, GST_VULKAN_HAVE_WINDOW_XCB=0)
-AM_CONDITIONAL(USE_XCB, test "x$GST_VULKAN_HAVE_WINDOW_XCB" = "x1")
-
-PKG_CHECK_MODULES(VULKAN_WAYLAND, wayland-client >= 1.4, GST_VULKAN_HAVE_WINDOW_WAYLAND=1, GST_VULKAN_HAVE_WINDOW_WAYLAND=0)
-AM_CONDITIONAL(USE_WAYLAND, test "x$GST_VULKAN_HAVE_WINDOW_WAYLAND" = "x1")
-VULKAN_CONFIG_DEFINES="
-#define GST_VULKAN_HAVE_WINDOW_XCB $GST_VULKAN_HAVE_WINDOW_XCB
-#define GST_VULKAN_HAVE_WINDOW_WAYLAND $GST_VULKAN_HAVE_WINDOW_WAYLAND"
-
-AC_CONFIG_COMMANDS([ext/vulkan/vkconfig.h], [
-	outfile=vkconfig.h-tmp
-	cat > $outfile <<\_______EOF
-/* vkconfig.h
- *
- * This is a generated file.  Please modify `configure.ac'
- */
-
-#ifndef __GST_VULKAN_CONFIG_H__
-#define __GST_VULKAN_CONFIG_H__
-
-#include <gst/gst.h>
-
-G_BEGIN_DECLS
-
-_______EOF
-
-	cat >>$outfile <<_______EOF
-$vulkan_config_defines
-_______EOF
-
-	cat >>$outfile <<_______EOF
-
-G_END_DECLS
-
-#endif  /* __GST_VULKAN_CONFIG_H__ */
-_______EOF
-
-
-	if cmp -s $outfile ext/vulkan/vkconfig.h; then
-          AC_MSG_NOTICE([ext/vulkan/vkconfig.h is unchanged])
-	  rm -f $outfile
-	else
-	  mv $outfile ext/vulkan/vkconfig.h
-	fi
-],[
-vulkan_config_defines='$VULKAN_CONFIG_DEFINES'
-])
 
 dnl *** sys plug-ins ***
 
@@ -888,12 +837,6 @@ AG_GST_CHECK_FEATURE(IPCPIPELINE, [Unix sockets], ipcpipeline, [
     fi
 ])
 
-dnl check for Video CD
-translit(dnm, m, l) AM_CONDITIONAL(USE_VCD, true)
-AG_GST_CHECK_FEATURE(VCD, [Video CD], vcdsrc, [
-  AC_CHECK_HEADER(linux/cdrom.h, HAVE_VCD="yes", HAVE_VCD="no")
-])
-
 dnl check for OpenSL ES
 translit(dnm, m, l) AM_CONDITIONAL(USE_OPENSLES, true)
 AG_GST_CHECK_FEATURE(OPENSLES, [OpenSL ES], opensl, [
@@ -944,15 +887,16 @@ AG_GST_CHECK_FEATURE(CUDA, [NVIDIA CUDA API],, [
       CUDA_LIBS="-L$CUDA_PREFIX/lib -L$CUDA_PREFIX/lib64 -L$CUDA_PREFIX/lib/stubs -L$CUDA_PREFIX/lib64/stubs -lcuda -lcudart"
     fi
   else
-    PKG_CHECK_MODULES([CUDA], [cuda-10.0 cudart-10.0],, [
-      PKG_CHECK_MODULES([CUDA], [cuda-9.2 cudart-9.2],, [
-        PKG_CHECK_MODULES([CUDA], [cuda-9.1 cudart-9.1],, [
-          PKG_CHECK_MODULES([CUDA], [cuda-9.0 cudart-9.0],, [
-            PKG_CHECK_MODULES([CUDA], [cuda-8.0 cudart-8.0],, [
-              PKG_CHECK_MODULES([CUDA], [cuda-7.5 cudart-7.5],, [
-                PKG_CHECK_MODULES([CUDA], [cuda-7.0 cudart-7.0],, [
-                  PKG_CHECK_MODULES([CUDA], [cuda-6.5 cudart-6.5],, [
-                    AC_MSG_WARN([Could not find cuda headers/libraries])])])])])])])])])
+    PKG_CHECK_MODULES([CUDA], [cuda-10.1 cudart-10.1],, [
+      PKG_CHECK_MODULES([CUDA], [cuda-10.0 cudart-10.0],, [
+        PKG_CHECK_MODULES([CUDA], [cuda-9.2 cudart-9.2],, [
+          PKG_CHECK_MODULES([CUDA], [cuda-9.1 cudart-9.1],, [
+            PKG_CHECK_MODULES([CUDA], [cuda-9.0 cudart-9.0],, [
+              PKG_CHECK_MODULES([CUDA], [cuda-8.0 cudart-8.0],, [
+                PKG_CHECK_MODULES([CUDA], [cuda-7.5 cudart-7.5],, [
+                  PKG_CHECK_MODULES([CUDA], [cuda-7.0 cudart-7.0],, [
+                    PKG_CHECK_MODULES([CUDA], [cuda-6.5 cudart-6.5],, [
+                      AC_MSG_WARN([Could not find cuda headers/libraries])])])])])])])])])])
   fi
 
   HAVE_CUDA_H=no
@@ -1058,7 +1002,9 @@ AG_GST_CHECK_FEATURE(MSDK, [Intel MediaSDK], msdk, [
     CPPFLAGS="$LIBMFX_CFLAGS $save_CPPFLAGS"
     AC_CHECK_HEADER(mfx/mfxdefs.h, [HAVE_MFX_MFXDEFS_H=1], [HAVE_MFX_MFXDEFS_H=0])
     if test $HAVE_MFX_MFXDEFS_H -eq 1; then
-      AC_DEFINE(HAVE_MFX_MFXDEFS_H, 1, [Define if mfx/mfxdefs.h available])
+      MFX_INCDIR="`$PKG_CONFIG --variable=includedir libmfx`"
+      MSDK_CFLAGS="-I$MFX_INCDIR/mfx"
+      AC_SUBST(MSDK_CFLAGS)
     fi
     CPPFLAGS="$save_CPPFLAGS"
   ], [
@@ -1070,8 +1016,8 @@ AG_GST_CHECK_FEATURE(MSDK, [Intel MediaSDK], msdk, [
             [AS_IF([test "x$MFX_HOME" != "x"],
                    [MSDK_PREFIX="$MFX_HOME"],
                    [MSDK_PREFIX="/opt/intel/media"])])
-    MSDK_CFLAGS="-I$MSDK_PREFIX/include"
-    MSDK_LIBS="-L$MSDK_PREFIX/lib/lin_x64 -lmfx -ldl"
+    MSDK_CFLAGS="-I$MSDK_PREFIX/include -I$MSDK_PREFIX/include/mfx"
+    MSDK_LIBS="-L$MSDK_PREFIX/lib/lin_x64 -L$MSDK_PREFIX/lib/x64 -L$MSDK_PREFIX/lib64 -L$MSDK_PREFIX/lib -lmfx -ldl"
     AC_SUBST(MSDK_CFLAGS)
     AC_SUBST(MSDK_LIBS)
 
@@ -1113,21 +1059,12 @@ AG_GST_CHECK_FEATURE(MSDK, [Intel MediaSDK], msdk, [
   [
     #include <mfxplugin.h>
   ])
-  dnl check the availability of vp9 apis in PREFIX/include/mfx
-  AC_CHECK_HEADER(mfx/mfxvp9.h, [HAVE_MFX_MFXVP9_H=1], [HAVE_MFX_MFXVP9_H=0],
-  [
-    #include <mfx/mfxplugin.h>
-  ])
-  if test $HAVE_MFX_MFXVP9_H -eq 1; then
-    AC_DEFINE(HAVE_MFX_MFXVP9_H, 1, [Define if mfx/mfxdefs.h available])
-  fi
 
-  if test $HAVE_MFXVP9_H -eq 1 \
-    -o $HAVE_MFX_MFXVP9_H -eq 1; then
+  if test $HAVE_MFXVP9_H -eq 1; then
       USE_MSDK_VP9_DEC=1
       AC_DEFINE(USE_MSDK_VP9_DEC, 1, [Define if MediaSDK VP9 decoder api is available])
   fi
-  ], [USE_MSDK_VP9_DEC=0])
+], [USE_MSDK_VP9_DEC=0])
 AM_CONDITIONAL(USE_MSDK_LIBVA,
     test "x$HAVE_MSDK" = "xyes" -a "x$HAVE_LIBVA_DRM" = "xyes")
 AM_CONDITIONAL([USE_MSDK_VP9_DEC],
@@ -1332,7 +1269,7 @@ dnl **** Wayland ****
 translit(dnm, m, l) AM_CONDITIONAL(USE_WAYLAND, true)
 AC_PATH_PROG([wayland_scanner], [wayland-scanner])
 AG_GST_CHECK_FEATURE(WAYLAND, [wayland sink], wayland , [
-  PKG_CHECK_MODULES(WAYLAND, wayland-client >= 1.11.0 libdrm >= 2.4.55 wayland-protocols >= 1.4, [
+  PKG_CHECK_MODULES(WAYLAND, wayland-client >= 1.11.0 libdrm >= 2.4.55 wayland-protocols >= 1.15, [
     if test "x$wayland_scanner" != "x"; then
       HAVE_WAYLAND="yes"
       AC_SUBST(WAYLAND_PROTOCOLS_DATADIR, `$PKG_CONFIG --variable=pkgdatadir wayland-protocols`)
@@ -1562,7 +1499,7 @@ AG_GST_CHECK_FEATURE(SRTP, [srtp library], srtp, [
     AC_DEFINE([HAVE_SRTP2], 1, [Define if libsrtp2 is used])
   else
     PKG_CHECK_MODULES(SRTP, libsrtp, HAVE_SRTP="yes",
-      AG_GST_CHECK_LIBHEADER(SRTP, srtp, srtp_init, , srtp/srtp.h, SRTP_LIBS="-lsrtp")
+      AG_GST_CHECK_LIBHEADER(SRTP, srtp, crypto_policy_set_aes_gcm_128_16_auth, , srtp/srtp.h, SRTP_LIBS="-lsrtp")
     )
   fi
   AC_SUBST(SRTP_LIBS)
@@ -1841,7 +1778,6 @@ AG_GST_CHECK_FEATURE(OPENCV, [opencv plugins], opencv, [
     AC_CHECK_HEADERS([opencv2/bgsegm.hpp \
                       opencv2/calib3d.hpp \
                       opencv2/core.hpp \
-                      opencv2/imgcodecs/imgcodecs_c.h \
                       opencv2/imgproc.hpp \
                       opencv2/objdetect.hpp \
                       opencv2/opencv.hpp \
@@ -1858,7 +1794,7 @@ AG_GST_CHECK_FEATURE(OPENCV, [opencv plugins], opencv, [
       HAVE_OPENCV="yes"
     fi
   ], [
-    PKG_CHECK_MODULES([OPENCV], [opencv4 >= 4.0.0 opencv4 < 4.1.0] , [
+    PKG_CHECK_MODULES([OPENCV], [opencv4 >= 4.0.0 opencv4 < 4.2.0] , [
     AC_PROG_CXX
     AC_LANG([C++])
     OLD_CPPFLAGS=$CPPFLAGS
@@ -1867,10 +1803,6 @@ AG_GST_CHECK_FEATURE(OPENCV, [opencv plugins], opencv, [
     AC_CHECK_HEADERS([opencv2/bgsegm.hpp \
                       opencv2/calib3d.hpp \
                       opencv2/core.hpp \
-                      opencv2/imgcodecs/legacy/constants_c.h \
-                      opencv2/imgproc/imgproc_c.h \
-                      opencv2/core/types_c.h \
-                      opencv2/core/core_c.h \
                       opencv2/imgproc.hpp \
                       opencv2/objdetect.hpp \
                       opencv2/opencv.hpp \
@@ -1992,23 +1924,6 @@ AG_GST_CHECK_FEATURE(GL, [gl elements], gl, [
 ])
 AM_CONDITIONAL(USE_GL, test "x$HAVE_GL" = "xyes")
 AM_CONDITIONAL(USE_OPENGL, test "x$GST_GL_HAVE_API_GL" = "x1")
-
-dnl *** Vulkan ***
-translit(dnm, m, l) AM_CONDITIONAL(USE_VULKAN, true)
-AG_GST_CHECK_FEATURE(VULKAN, [Vulkan elements], vulkan, [
-  AC_CHECK_HEADER(vulkan/vulkan.h, [
-    AC_CHECK_LIB(vulkan, vkCreateDevice, [
-      VULKAN_LIBS="-lvulkan"
-      AC_SUBST(VULKAN_LIBS)
-      if test "x$GST_VULKAN_HAVE_WINDOW_XCB" = "x1"; then
-        HAVE_VULKAN="yes"
-      fi
-      if test "x$GST_VULKAN_HAVE_WINDOW_WAYLAND" = "x1"; then
-        HAVE_VULKAN="yes"
-      fi
-    ], [])
-  ], [])
-])
 
 dnl *** teletextdec ***
 translit(dnm, m, l) AM_CONDITIONAL(USE_TELETEXTDEC, true)
@@ -2139,51 +2054,6 @@ AG_GST_CHECK_FEATURE(DVB, [DVB Source], dvb, [
   ], [HAVE_DVB="no"])
 ])
 
-dnl *** vdpau ***
-translit(dnm, m, l) AM_CONDITIONAL(USE_VDPAU, true)
-AG_GST_CHECK_FEATURE(VDPAU, [VDPAU], vdpau, [
-  VDPAU_CFLAGS=
-  VDPAU_LIBS=-lvdpau
-  HAVE_VDPAU=no
-
-  PKG_CHECK_MODULES(VDPAU, vdpau, [HAVE_VDPAU="yes"],
-  [
-    if test "$HAVE_VDPAU" = "no"; then
-      saved_CPPFLAGS="$CPPFLAGS"
-      AC_CHECK_HEADER([vdpau/vdpau.h], [HAVE_VDPAU_H=yes])
-
-      if test -z "$HAVE_VDPAU_H"; then
-        dnl Didn't find VDPAU header straight away.
-        dnl Try /usr/include/nvidia. Need to clear caching vars first
-        AC_MSG_NOTICE([VDPAU header not in standard path. Checking /usr/include/nvidia])
-        unset ac_cv_header_vdpau_vdpau_h
-        unset ac_cv_header_vdpau_vdpau_x11_h
-        VDPAU_CFLAGS="-I/usr/include/nvidia"
-        VDPAU_LIBS="-L/usr/lib/nvidia -lvdpau"
-        CPPFLAGS="$VDPAU_CFLAGS $saved_CPPFLAGS"
-        AC_CHECK_HEADER([vdpau/vdpau.h], [HAVE_VDPAU_H=yes])
-      fi
-
-      AC_CHECK_HEADER([vdpau/vdpau_x11.h], [HAVE_VDPAU_X11_H=yes])
-
-      if test "x$HAVE_VDPAU_H" = "xyes" -a "x$HAVE_VDPAU_X11_H" = "xyes"; then
-        dnl Found the headers - look for the lib
-        AC_MSG_NOTICE([VDPAU headers found. Checking libraries])
-        saved_LIBS="$LIBS"
-        LIBS="$VDPAU_LIBS $saved_LIBS"
-        AC_CHECK_LIB(vdpau,vdp_device_create_x11,[HAVE_VDPAU="yes"])
-        LIBS="$saved_LIBS"
-      fi
-    fi
-  ])
-
-  if test "$HAVE_VDPAU" = "yes"; then
-    AC_MSG_NOTICE([Found up to date VDPAU installation])
-    AC_SUBST(VDPAU_CFLAGS)
-    AC_SUBST(VDPAU_LIBS)
-  fi
-])
-
 dnl *** sbc ***
 translit(dnm, m, l) AM_CONDITIONAL(USE_SBC, true)
 AG_GST_CHECK_FEATURE(SBC, [SBC bluetooth audio codec], sbc, [
@@ -2312,6 +2182,15 @@ AG_GST_CHECK_FEATURE(WEBRTC, [WebRTC], webrtc, [
   ])
 ])
 
+dnl *** WPE ***
+translit(dnm, m, l) AM_CONDITIONAL(USE_WPE, true)
+AG_GST_CHECK_FEATURE(WPE, [WPE plug-in], wpe, [
+PKG_CHECK_MODULES(WPE, [ wpe-webkit-1.0 >= 2.24 wpebackend-fdo-1.0 egl xkbcommon ], [
+    HAVE_WPE="yes" ], [
+    HAVE_WPE="no"
+  ])
+])
+
 dnl *** usrsctp ***
 translit(dnm, m, l) AM_CONDITIONAL(USE_SCTP, true)
 AG_GST_CHECK_FEATURE(SCTP, [sctp plug-in], sctp, [
@@ -2394,7 +2273,6 @@ AM_CONDITIONAL(USE_SRTP, false)
 AM_CONDITIONAL(USE_SRT, false)
 AM_CONDITIONAL(USE_GME, false)
 AM_CONDITIONAL(USE_DVB, false)
-AM_CONDITIONAL(USE_VDPAU, false)
 AM_CONDITIONAL(USE_SBC, false)
 AM_CONDITIONAL(USE_ZBAR, false)
 AM_CONDITIONAL(USE_RSVG, false)
@@ -2407,7 +2285,6 @@ AM_CONDITIONAL(USE_WEBRTCDSP, false)
 AM_CONDITIONAL(USE_OPENH264, false)
 AM_CONDITIONAL(USE_X265, false)
 AM_CONDITIONAL(USE_DTLS, false)
-AM_CONDITIONAL(USE_VULKAN, false)
 AM_CONDITIONAL(USE_TTML, false)
 AM_CONDITIONAL(USE_SCTP, false)
 
@@ -2564,6 +2441,8 @@ gst/pnm/Makefile
 gst/proxy/Makefile
 gst/rawparse/Makefile
 gst/removesilence/Makefile
+gst/rist/Makefile
+gst/rtp/Makefile
 gst/sdp/Makefile
 gst/segmentclip/Makefile
 gst/siren/Makefile
@@ -2614,8 +2493,6 @@ sys/opensles/Makefile
 sys/shm/Makefile
 sys/tinyalsa/Makefile
 sys/uvch264/Makefile
-sys/vcd/Makefile
-sys/vdpau/Makefile
 sys/wasapi/Makefile
 sys/winks/Makefile
 sys/winscreencap/Makefile
@@ -2693,21 +2570,15 @@ ext/srtp/Makefile
 ext/teletextdec/Makefile
 ext/gme/Makefile
 ext/wildmidi/Makefile
-ext/vulkan/Makefile
-ext/vulkan/xcb/Makefile
-ext/vulkan/wayland/Makefile
 ext/webp/Makefile
 ext/x265/Makefile
 ext/zbar/Makefile
 ext/dtls/Makefile
 ext/webrtc/Makefile
 ext/webrtcdsp/Makefile
+ext/wpe/Makefile
 ext/ttml/Makefile
 po/Makefile.in
-docs/Makefile
-docs/plugins/Makefile
-docs/libs/Makefile
-docs/version.entities
 pkgconfig/Makefile
 pkgconfig/gstreamer-plugins-bad.pc
 pkgconfig/gstreamer-plugins-bad-uninstalled.pc

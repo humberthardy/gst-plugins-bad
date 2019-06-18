@@ -16,7 +16,8 @@ if use_wayland
         ['/unstable/linux-dmabuf/linux-dmabuf-unstable-v1.xml',
          'linux-dmabuf-unstable-v1-protocol.c', 'linux-dmabuf-unstable-v1-client-protocol.h'],
         ['/unstable/fullscreen-shell/fullscreen-shell-unstable-v1.xml',
-         'fullscreen-shell-unstable-v1-protocol.c', 'fullscreen-shell-unstable-v1-client-protocol.h']
+         'fullscreen-shell-unstable-v1-protocol.c', 'fullscreen-shell-unstable-v1-client-protocol.h'],
+        ['/stable/xdg-shell/xdg-shell.xml', 'xdg-shell-protocol.c', 'xdg-shell-client-protocol.h'],
     ]
     protocols_files = []
 
@@ -44,4 +45,5 @@ if use_wayland
         install_dir : plugins_install_dir,
     )
     pkgconfig.generate(gstwaylandsink, install_dir : plugins_pkgconfig_install_dir)
+    plugins += [gstwaylandsink]
 endif

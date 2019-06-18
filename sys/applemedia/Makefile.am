@@ -69,6 +69,7 @@ libgstapplemedia_la_LDFLAGS =			\
 noinst_HEADERS =				\
 	avfvideosrc.h				\
 	avsamplevideosink.h			\
+	avfdeviceprovider.h			\
 	vtenc.h					\
 	vtdec.h					\
 	vtutil.h				\
@@ -109,6 +110,7 @@ if HAVE_AVFOUNDATION
 
 libgstapplemedia_la_SOURCES +=			\
 	avfvideosrc.m				\
+	avfdeviceprovider.m			\
 	avfassetsrc.m				\
 	avsamplevideosink.m
 

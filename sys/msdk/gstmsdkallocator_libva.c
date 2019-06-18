@@ -98,6 +98,11 @@ gst_msdk_frame_alloc (mfxHDL pthis, mfxFrameAllocRequest * req,
     if (format == VA_RT_FORMAT_YUV420 && va_fourcc == VA_FOURCC_P010)
       format = VA_RT_FORMAT_YUV420_10;
 
+#if VA_CHECK_VERSION(1, 4, 1)
+    if (format == VA_RT_FORMAT_YUV444 && va_fourcc == VA_FOURCC_A2R10G10B10)
+      format = VA_RT_FORMAT_RGB32_10;
+#endif
+
     va_status = vaCreateSurfaces (gst_msdk_context_get_handle (context),
         format,
         req->Info.Width, req->Info.Height, surfaces, surfaces_num, &attrib, 1);
@@ -129,8 +134,12 @@ gst_msdk_frame_alloc (mfxHDL pthis, mfxFrameAllocRequest * req,
 
         if (MFX_ERR_NONE != status) {
           GST_ERROR ("failed to get dmabuf handle");
-          vaDestroyImage (gst_msdk_context_get_handle (context),
+          va_status = vaDestroyImage (gst_msdk_context_get_handle (context),
               msdk_mids[i].image.image_id);
+          if (va_status == VA_STATUS_SUCCESS) {
+            msdk_mids[i].image.image_id = VA_INVALID_ID;
+            msdk_mids[i].image.buf = VA_INVALID_ID;
+          }
         }
       } else {
         /* useful to check the image mapping state later */
@@ -209,7 +218,11 @@ gst_msdk_frame_free (mfxHDL pthis, mfxFrameAllocResponse * resp)
       if (mem->info.mem_type == VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME)
         vaReleaseBufferHandle (dpy, mem->image.buf);
 
-      vaDestroyImage (dpy, mem->image.image_id);
+      if (mem->image.image_id != VA_INVALID_ID &&
+          vaDestroyImage (dpy, mem->image.image_id) == VA_STATUS_SUCCESS) {
+        mem_id->image.image_id = VA_INVALID_ID;
+        mem_id->image.buf = VA_INVALID_ID;
+      }
     }
 
     va_status =
@@ -265,6 +278,10 @@ gst_msdk_frame_lock (mfxHDL pthis, mfxMemId mid, mfxFrameData * data)
 
     if (status != MFX_ERR_NONE) {
       GST_WARNING ("failed to map");
+      if (vaDestroyImage (dpy, mem_id->image.image_id) == VA_STATUS_SUCCESS) {
+        mem_id->image.image_id = VA_INVALID_ID;
+        mem_id->image.buf = VA_INVALID_ID;
+      }
       return status;
     }
 
@@ -300,6 +317,31 @@ gst_msdk_frame_lock (mfxHDL pthis, mfxMemId mid, mfxFrameData * data)
         data->B = data->R + 2;
         data->A = data->R + 3;
         break;
+#if (MFX_VERSION >= 1028)
+      case VA_FOURCC_RGB565:
+        data->Pitch = mem_id->image.pitches[0];
+        data->R = buf + mem_id->image.offsets[0];
+        data->G = data->R;
+        data->B = data->R;
+        break;
+#endif
+      case VA_FOURCC_AYUV:
+        data->PitchHigh = (mfxU16) (mem_id->image.pitches[0] / (1 << 16));
+        data->PitchLow = (mfxU16) (mem_id->image.pitches[0] % (1 << 16));
+        data->V = buf + mem_id->image.offsets[0];
+        data->U = data->V + 1;
+        data->Y = data->V + 2;
+        data->A = data->V + 3;
+        break;
+#if VA_CHECK_VERSION(1, 4, 1)
+      case VA_FOURCC_A2R10G10B10:
+        data->Pitch = mem_id->image.pitches[0];
+        data->R = buf + mem_id->image.offsets[0];
+        data->G = data->R;
+        data->B = data->R;
+        data->A = data->R;
+        break;
+#endif
       default:
         g_assert_not_reached ();
         break;
@@ -331,6 +373,11 @@ gst_msdk_frame_unlock (mfxHDL pthis, mfxMemId mid, mfxFrameData * ptr)
   if (mem_id->fourcc != MFX_FOURCC_P8) {
     vaUnmapBuffer (dpy, mem_id->image.buf);
     va_status = vaDestroyImage (dpy, mem_id->image.image_id);
+
+    if (va_status == VA_STATUS_SUCCESS) {
+      mem_id->image.image_id = VA_INVALID_ID;
+      mem_id->image.buf = VA_INVALID_ID;
+    }
   } else {
     va_status = vaUnmapBuffer (dpy, *(mem_id->surface));
   }
@@ -366,8 +413,7 @@ gst_msdk_set_frame_allocator (GstMsdkContext * context)
     .Free = gst_msdk_frame_free,
   };
 
-  MFXVideoCORE_SetFrameAllocator (gst_msdk_context_get_session (context),
-      &gst_msdk_frame_allocator);
+  gst_msdk_context_set_frame_allocator (context, &gst_msdk_frame_allocator);
 }
 
 gboolean
@@ -428,6 +474,26 @@ gst_msdk_export_dmabuf_to_vasurface (GstMsdkContext * context,
       va_chroma = VA_RT_FORMAT_YUV420_10;
       va_fourcc = VA_FOURCC_P010;
       break;
+    case GST_VIDEO_FORMAT_UYVY:
+      va_chroma = VA_RT_FORMAT_YUV422;
+      va_fourcc = VA_FOURCC_UYVY;
+      break;
+#if (MFX_VERSION >= 1028)
+    case GST_VIDEO_FORMAT_RGB16:
+      va_chroma = VA_RT_FORMAT_RGB16;
+      va_fourcc = VA_FOURCC_RGB565;
+      break;
+#endif
+    case GST_VIDEO_FORMAT_VUYA:
+      va_chroma = VA_RT_FORMAT_YUV444;
+      va_fourcc = VA_FOURCC_AYUV;
+      break;
+#if VA_CHECK_VERSION(1, 4, 1)
+    case GST_VIDEO_FORMAT_BGR10A2_LE:
+      va_chroma = VA_RT_FORMAT_RGB32_10;
+      va_fourcc = VA_FOURCC_A2R10G10B10;
+      break;
+#endif
     default:
       goto error_unsupported_format;
   }

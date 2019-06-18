@@ -13,8 +13,8 @@ srtp_dep = dependency('libsrtp2', version : '>= 2.1.0', required : false)
 if srtp_dep.found()
   srtp_cargs += ['-DHAVE_SRTP2']
 else
-  srtp_dep = dependency('libsrtp', required : false)
-  if not srtp_dep.found() and cc.has_header_symbol('srtp/srtp.h', 'srtp_init')
+  srtp_dep = dependency('libsrtp', version: '>= 1.6.0', required : false)
+  if not srtp_dep.found() and cc.has_header_symbol('srtp/srtp.h', 'crypto_policy_set_aes_gcm_128_16_auth')
     srtp_dep = cc.find_library('srtp', required : false)
   endif
 endif
@@ -38,4 +38,5 @@ if srtp_dep.found()
     install_dir : plugins_install_dir,
   )
   pkgconfig.generate(gstsrtp, install_dir : plugins_pkgconfig_install_dir)
+  plugins += [gstsrtp]
 endif

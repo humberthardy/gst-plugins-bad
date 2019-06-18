@@ -947,6 +947,9 @@ gst_hls_demux_finish_fragment (GstAdaptiveDemux * demux,
     }
   }
 
+  if (G_UNLIKELY (stream->downloading_header || stream->downloading_index))
+    return GST_FLOW_OK;
+
   gst_hls_demux_stream_clear_pending_data (hls_stream);
 
   if (ret == GST_FLOW_OK || ret == GST_FLOW_NOT_LINKED)
@@ -1085,6 +1088,18 @@ gst_hls_demux_update_fragment_info (GstAdaptiveDemuxStream * stream)
   if (file == NULL) {
     GST_INFO_OBJECT (hlsdemux, "This playlist doesn't contain more fragments");
     return GST_FLOW_EOS;
+  }
+
+  if (GST_ADAPTIVE_DEMUX_STREAM_NEED_HEADER (stream) && file->init_file) {
+    GstM3U8InitFile *header_file = file->init_file;
+    stream->fragment.header_uri = g_strdup (header_file->uri);
+    stream->fragment.header_range_start = header_file->offset;
+    if (header_file->size != -1) {
+      stream->fragment.header_range_end =
+          header_file->offset + header_file->size - 1;
+    } else {
+      stream->fragment.header_range_end = -1;
+    }
   }
 
   if (stream->discont)

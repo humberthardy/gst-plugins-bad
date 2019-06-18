@@ -102,6 +102,7 @@ typedef struct TsMux TsMux;
 
 typedef gboolean (*TsMuxWriteFunc) (GstBuffer * buf, void *user_data, gint64 new_pcr);
 typedef void (*TsMuxAllocFunc) (GstBuffer ** buf, void *user_data);
+typedef TsMuxStream * (*TsMuxNewStreamFunc) (guint16 new_pid, guint stream_type, void *user_data);
 
 struct TsMuxSection {
   TsMuxPacketInfo pi;
@@ -118,8 +119,9 @@ struct TsMuxProgram {
 
   /* interval between PMT in MPEG PTS clock time */
   guint    pmt_interval;
-  /* last time PMT written in MPEG PTS clock time */
-  gint64   last_pmt_ts;
+
+  /* Next PMT position, 27 MHz */
+  gint64   next_pmt_pcr;
 
   /* program ID for the PAT */
   guint16 pgm_number;
@@ -159,15 +161,15 @@ struct TsMux {
   gboolean pat_changed;
   /* interval between PAT in MPEG PTS clock time */
   guint    pat_interval;
-  /* last time PAT written in MPEG PTS clock time */
-  gint64   last_pat_ts;
+  /* Next PAT position, 27 MHz */
+  gint64   next_pat_pcr;
 
   /* trigger writing Service Information Tables */
   gboolean si_changed;
   /* interval between SIT in MPEG PTS clock time */
   guint    si_interval;
-  /* last time SIT written in MPEG PTS clock time */
-  gint64   last_si_ts;
+  /* Next SIT position, 27 MHz */
+  gint64   next_si_pcr;
 
   /* callback to write finished packet */
   TsMuxWriteFunc write_func;
@@ -175,9 +177,18 @@ struct TsMux {
   /* callback to alloc new packet buffer */
   TsMuxAllocFunc alloc_func;
   void *alloc_func_data;
+  /* callback to create a new stream */
+  TsMuxNewStreamFunc new_stream_func;
+  void *new_stream_data;
 
   /* scratch space for writing ES_info descriptors */
   guint8 es_info_buf[TSMUX_MAX_ES_INFO_LENGTH];
+
+  guint64 bitrate;
+  guint64 n_bytes;
+
+  /* For the per-PID continuity counter */
+  guint8 pid_packet_counts[8192];
 };
 
 /* create/free new muxer session */
@@ -187,10 +198,12 @@ void 		tsmux_free 			(TsMux *mux);
 /* Setting muxing session properties */
 void 		tsmux_set_write_func 		(TsMux *mux, TsMuxWriteFunc func, void *user_data);
 void 		tsmux_set_alloc_func 		(TsMux *mux, TsMuxAllocFunc func, void *user_data);
+void    tsmux_set_new_stream_func (TsMux * mux, TsMuxNewStreamFunc func, void *user_data);
 void 		tsmux_set_pat_interval          (TsMux *mux, guint interval);
 guint 		tsmux_get_pat_interval          (TsMux *mux);
 void 		tsmux_resend_pat                (TsMux *mux);
 guint16		tsmux_get_new_pid 		(TsMux *mux);
+void    tsmux_set_bitrate       (TsMux *mux, guint64 bitrate);
 
 /* pid/program management */
 TsMuxProgram *	tsmux_program_new 		(TsMux *mux, gint prog_id);
@@ -206,7 +219,7 @@ void            tsmux_resend_si                 (TsMux *mux);
 gboolean        tsmux_add_mpegts_si_section     (TsMux * mux, GstMpegtsSection * section);
 
 /* stream management */
-TsMuxStream *	tsmux_create_stream 		(TsMux *mux, TsMuxStreamType stream_type, guint16 pid, gchar *language);
+TsMuxStream *	tsmux_create_stream 		(TsMux *mux, guint stream_type, guint16 pid, gchar *language);
 TsMuxStream *	tsmux_find_stream 		(TsMux *mux, guint16 pid);
 
 void 		tsmux_program_add_stream 	(TsMuxProgram *program, TsMuxStream *stream);

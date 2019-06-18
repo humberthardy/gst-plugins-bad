@@ -46,7 +46,7 @@ G_DEFINE_TYPE (GstNvH265Enc, gst_nv_h265_enc, GST_TYPE_NV_BASE_ENC);
   ";" \
   "video/x-raw(memory:GLMemory), " \
   "format = (string) { NV12, Y444 }, " \
-  "width = (int) [ 16, 4096 ], height = (int) [ 16, 2160 ], " \
+  "width = (int) [ 16, 4096 ], height = (int) [ 16, 4096 ], " \
   "framerate = (fraction) [0, MAX] "
 #else
 #define GL_CAPS_STR ""
@@ -57,7 +57,7 @@ static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS ("video/x-raw, " "format = (string) { NV12, I420 }, "       // TODO: YV12, Y444 support
-        "width = (int) [ 16, 4096 ], height = (int) [ 16, 2160 ], "
+        "width = (int) [ 16, 4096 ], height = (int) [ 16, 4096 ], "
         "framerate = (fraction) [0, MAX] "
         GL_CAPS_STR
     ));
@@ -66,7 +66,7 @@ static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS ("video/x-h265, "
-        "width = (int) [ 1, 4096 ], height = (int) [ 1, 2160 ], "
+        "width = (int) [ 1, 4096 ], height = (int) [ 1, 4096 ], "
         "framerate = (fraction) [0/1, MAX], "
         "stream-format = (string) byte-stream, "
         "alignment = (string) au, "
@@ -117,7 +117,7 @@ gst_nv_h265_enc_class_init (GstNvH265EncClass * klass)
 
   gst_element_class_set_static_metadata (element_class,
       "NVENC HEVC Video Encoder",
-      "Codec/Encoder/Video",
+      "Codec/Encoder/Video/Hardware",
       "Encode HEVC video streams using NVIDIA's hardware-accelerated NVENC encoder API",
       "Tim-Philipp Müller <tim@centricular.com>, "
       "Matthew Waters <matthew@centricular.com>, "
@@ -146,6 +146,9 @@ _get_supported_profiles (GstNvH265Enc * nvenc)
   GValue list = G_VALUE_INIT;
   GValue val = G_VALUE_INIT;
   guint i, n, n_profiles;
+
+  if (nvenc->supported_profiles)
+    return TRUE;
 
   nv_ret =
       NvEncGetEncodeProfileGUIDCount (GST_NV_BASE_ENC (nvenc)->encoder,
@@ -178,8 +181,8 @@ _get_supported_profiles (GstNvH265Enc * nvenc)
     return FALSE;
 
   GST_OBJECT_LOCK (nvenc);
-  g_free (nvenc->supported_profiles);
-  nvenc->supported_profiles = g_memdup (&list, sizeof (GValue));
+  nvenc->supported_profiles = g_new0 (GValue, 1);
+  *nvenc->supported_profiles = list;
   GST_OBJECT_UNLOCK (nvenc);
 
   return TRUE;
@@ -228,6 +231,8 @@ gst_nv_h265_enc_close (GstVideoEncoder * enc)
   GstNvH265Enc *nvenc = GST_NV_H265_ENC (enc);
 
   GST_OBJECT_LOCK (nvenc);
+  if (nvenc->supported_profiles)
+    g_value_unset (nvenc->supported_profiles);
   g_free (nvenc->supported_profiles);
   nvenc->supported_profiles = NULL;
   GST_OBJECT_UNLOCK (nvenc);

@@ -6,18 +6,21 @@ zvbi_sources = [
   'decoder.c',
   'raw_decoder.c',
   'sampling_par.c',
+  'io-sim.c',
 ]
 
 if pangocairo_dep.found()
   gstclosedcaption = library('gstclosedcaption',
     'gstcccombiner.c', 'gstccextractor.c', 'gstccconverter.c', 'gstclosedcaption.c',
-    'gstline21dec.c', 'gstcea708decoder.c', 'gstceaccoverlay.c', zvbi_sources,
+    'gstline21dec.c', 'gstcea708decoder.c', 'gstceaccoverlay.c', 'gstline21enc.c',
+    zvbi_sources,
     c_args : gst_plugins_bad_args,
     link_args : noseh_link_args,
     include_directories : [configinc],
-    dependencies : [gstvideo_dep, gstbase_dep, gst_dep, pangocairo_dep],
+    dependencies : [gstvideo_dep, gstbase_dep, gst_dep, pangocairo_dep, libm],
     install : true,
     install_dir : plugins_install_dir,
   )
   pkgconfig.generate(gstclosedcaption, install_dir : plugins_pkgconfig_install_dir)
+  plugins += [gstclosedcaption]
 endif

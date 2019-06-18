@@ -80,16 +80,24 @@
 #include <gst/base/gstbitreader.h>
 #include <string.h>
 
-GST_DEBUG_CATEGORY_STATIC (h264_parser_debug);
-#define GST_CAT_DEFAULT h264_parser_debug
+#ifndef GST_DISABLE_GST_DEBUG
+#define GST_CAT_DEFAULT gst_h264_debug_category_get()
+static GstDebugCategory *
+gst_h264_debug_category_get (void)
+{
+  static gsize cat_gonce = 0;
 
-static gboolean initialized = FALSE;
-#define INITIALIZE_DEBUG_CATEGORY \
-  if (!initialized) { \
-    GST_DEBUG_CATEGORY_INIT (h264_parser_debug, "codecparsers_h264", 0, \
-        "h264 parser library"); \
-    initialized = TRUE; \
+  if (g_once_init_enter (&cat_gonce)) {
+    GstDebugCategory *cat = NULL;
+
+    GST_DEBUG_CATEGORY_INIT (cat, "codecparsers_h264", 0, "h264 parse library");
+
+    g_once_init_leave (&cat_gonce, (gsize) cat);
   }
+
+  return (GstDebugCategory *) cat_gonce;
+}
+#endif /* GST_DISABLE_GST_DEBUG */
 
 /**** Default scaling_lists according to Table 7-2 *****/
 static const guint8 default_4x4_intra[16] = {
@@ -1009,6 +1017,51 @@ error:
 }
 
 static GstH264ParserResult
+gst_h264_parser_parse_registered_user_data (GstH264NalParser * nalparser,
+    GstH264RegisteredUserData * rud, NalReader * nr, guint payload_size)
+{
+  guint8 *data = NULL;
+  guint i;
+
+  rud->data = NULL;
+  rud->size = 0;
+
+  if (payload_size < 2)
+    return GST_H264_PARSER_ERROR;
+
+  READ_UINT8 (nr, rud->country_code, 8);
+  --payload_size;
+
+  if (rud->country_code == 0xFF) {
+    READ_UINT8 (nr, rud->country_code_extension, 8);
+    --payload_size;
+  } else {
+    rud->country_code_extension = 0;
+  }
+
+  if (payload_size < 8)
+    return GST_H264_PARSER_ERROR;
+
+  data = g_malloc (payload_size);
+  for (i = 0; i < payload_size / 8; ++i) {
+    READ_UINT8 (nr, data[i], 8);
+  }
+
+  GST_MEMDUMP ("SEI user data", data, payload_size / 8);
+
+  rud->data = data;
+  rud->size = payload_size;
+  return GST_H264_PARSER_OK;
+
+error:
+  {
+    GST_WARNING ("error parsing \"Registered User Data\"");
+    g_free (data);
+    return GST_H264_PARSER_ERROR;
+  }
+}
+
+static GstH264ParserResult
 gst_h264_parser_parse_recovery_point (GstH264NalParser * nalparser,
     GstH264RecoveryPoint * rp, NalReader * nr)
 {
@@ -1157,6 +1210,10 @@ gst_h264_parser_parse_sei_message (GstH264NalParser * nalparser,
       res = gst_h264_parser_parse_pic_timing (nalparser,
           &sei->payload.pic_timing, nr);
       break;
+    case GST_H264_SEI_REGISTERED_USER_DATA:
+      res = gst_h264_parser_parse_registered_user_data (nalparser,
+          &sei->payload.registered_user_data, nr, payload_size);
+      break;
     case GST_H264_SEI_RECOVERY_POINT:
       res = gst_h264_parser_parse_recovery_point (nalparser,
           &sei->payload.recovery_point, nr);
@@ -1218,7 +1275,6 @@ gst_h264_nal_parser_new (void)
   GstH264NalParser *nalparser;
 
   nalparser = g_slice_new0 (GstH264NalParser);
-  INITIALIZE_DEBUG_CATEGORY;
 
   return nalparser;
 }
@@ -1751,7 +1807,6 @@ gst_h264_parse_sps (GstH264NalUnit * nalu, GstH264SPS * sps,
 {
   NalReader nr;
 
-  INITIALIZE_DEBUG_CATEGORY;
   GST_DEBUG ("parsing SPS");
 
   nal_reader_init (&nr, nalu->data + nalu->offset + nalu->header_bytes,
@@ -1838,7 +1893,6 @@ gst_h264_parse_subset_sps (GstH264NalUnit * nalu, GstH264SPS * sps,
 {
   NalReader nr;
 
-  INITIALIZE_DEBUG_CATEGORY;
   GST_DEBUG ("parsing Subset SPS");
 
   nal_reader_init (&nr, nalu->data + nalu->offset + nalu->header_bytes,
@@ -1887,7 +1941,6 @@ gst_h264_parse_pps (GstH264NalParser * nalparser, GstH264NalUnit * nalu,
   guint8 pic_scaling_matrix_present_flag;
   gint qp_bd_offset;
 
-  INITIALIZE_DEBUG_CATEGORY;
   GST_DEBUG ("parsing PPS");
 
   nal_reader_init (&nr, nalu->data + nalu->offset + nalu->header_bytes,
@@ -2276,6 +2329,22 @@ gst_h264_sps_clear (GstH264SPS * sps)
   }
 }
 
+static void
+h264_sei_message_clear (GstH264SEIMessage * sei_msg)
+{
+  switch (sei_msg->payloadType) {
+    case GST_H264_SEI_REGISTERED_USER_DATA:{
+      GstH264RegisteredUserData *rud = &sei_msg->payload.registered_user_data;
+
+      g_free ((guint8 *) rud->data);
+      rud->data = NULL;
+      break;
+    }
+    default:
+      break;
+  }
+}
+
 /**
  * gst_h264_parser_parse_sei:
  * @nalparser: a #GstH264NalParser
@@ -2299,6 +2368,7 @@ gst_h264_parser_parse_sei (GstH264NalParser * nalparser, GstH264NalUnit * nalu,
   nal_reader_init (&nr, nalu->data + nalu->offset + nalu->header_bytes,
       nalu->size - nalu->header_bytes);
   *messages = g_array_new (FALSE, FALSE, sizeof (GstH264SEIMessage));
+  g_array_set_clear_func (*messages, (GDestroyNotify) h264_sei_message_clear);
 
   do {
     res = gst_h264_parser_parse_sei_message (nalparser, &nr, &sei);

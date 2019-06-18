@@ -53,6 +53,9 @@ GstWebRTCSessionDescription *       gst_webrtc_session_description_copy     (con
 GST_WEBRTC_API
 void                                gst_webrtc_session_description_free     (GstWebRTCSessionDescription * desc);
 
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstWebRTCSessionDescription, gst_webrtc_session_description_free)
+
 G_END_DECLS
 
 #endif /* __GST_WEBRTC_PEERCONNECTION_H__ */

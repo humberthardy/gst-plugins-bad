@@ -23,6 +23,15 @@ if not ['darwin', 'ios'].contains(host_system) or applemedia_option.disabled()
   subdir_done()
 endif
 
+if ['darwin', 'ios'].contains(host_system)
+  objc = meson.get_compiler('objc')
+  if not objc.has_argument('-fobjc-arc')
+    error('ARC is required for building')
+  endif
+
+  applemedia_objc_args += ['-fobjc-arc']
+endif
+
 applemedia_frameworks = []
 corefoundation_dep = dependency('CoreFoundation', required : applemedia_option)
 coremedia_dep = dependency('CoreMedia', required : applemedia_option)
@@ -35,7 +44,8 @@ if avfoundation_dep.found()
     applemedia_sources += [
         'avfvideosrc.m',
         'avfassetsrc.m',
-        'avsamplevideosink.m'
+        'avsamplevideosink.m',
+        'avfdeviceprovider.m',
     ]
     applemedia_frameworks += [avfoundation_dep]
 endif
@@ -88,4 +98,5 @@ if applemedia_found_deps
         install_dir : plugins_install_dir,
     )
     pkgconfig.generate(gstapplemedia, install_dir : plugins_pkgconfig_install_dir)
+    plugins += [gstapplemedia]
 endif

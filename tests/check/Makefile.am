@@ -18,8 +18,7 @@ AM_TESTS_ENVIRONMENT += \
 	    decklinksrc \
 	    decklinksink dtlssrtpdec dtlssrtpenc dvbsrc dvbbasebin dfbvideosink festival fluidsynth \
 	    kmssink \
-	    rsndvdbin vcdsrc rfbsrc vdpauyuvvideo vdpauvideoyuv \
-	    vdpaumpegdec vdpaumpeg4dec vdpauh264dec vdpauvideopostprocess vdpausink neonhttpsrc waylandsink"
+	    rsndvdbin rfbsrc neonhttpsrc waylandsink"
 
 plugindir = $(libdir)/gstreamer-@GST_API_VERSION@
 
@@ -41,7 +40,7 @@ check_assrender =
 endif
 
 if USE_PANGO
-check_closedcaption = elements/ccconverter elements/cccombiner elements/ccextractor
+check_closedcaption = elements/ccconverter elements/cccombiner elements/ccextractor elements/line21
 else
 check_closedcaption =
 endif
@@ -178,6 +177,7 @@ endif
 
 if USE_CURL
 check_curl = elements/curlhttpsink \
+	elements/curlhttpsrc \
 	elements/curlfilesink \
 	elements/curlftpsink \
 	$(check_curl_sftp) \
@@ -220,6 +220,12 @@ if USE_MSDK
 check_msdk=elements/msdkh264enc
 else
 check_msdk=
+endif
+
+if USE_NVENC
+check_nvenc=elements/nvenc
+else
+check_nvenc=
 endif
 
 VALGRIND_TO_FIX = \
@@ -283,6 +289,8 @@ check_PROGRAMS = \
 	elements/pnm \
 	elements/rtponvifparse \
 	elements/rtponviftimestamp \
+	elements/rtpsrc \
+	elements/rtpsink \
 	elements/id3mux \
 	pipelines/mxf \
 	libs/isoff \
@@ -305,6 +313,7 @@ check_PROGRAMS = \
 	$(check_player) \
 	$(check_webrtc) \
 	$(check_msdk) \
+	$(check_nvenc) \
 	$(EXPERIMENTAL_CHECKS)
 
 noinst_HEADERS = elements/mxfdemux.h libs/isoff.h
@@ -342,7 +351,10 @@ elements_mpeg4videoparse_LDADD = libparser.la $(LDADD)
 
 elements_h263parse_LDADD = libparser.la $(LDADD)
 
-elements_h264parse_LDADD = libparser.la $(LDADD)
+elements_h264parse_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) \
+	$(GST_BASE_CFLAGS) $(GST_CFLAGS) $(AM_CFLAGS)
+elements_h264parse_LDADD = libparser.la \
+	$(GST_PLUGINS_BASE_LIBS) -lgstvideo-$(GST_API_VERSION) $(LDADD)
 
 elements_pcapparse_LDADD = libparser.la $(LDADD)
 
@@ -469,6 +481,12 @@ elements_cccombiner_LDADD = $(GST_PLUGINS_BASE_LIBS) $(GST_VIDEO_LIBS) $(GST_BAS
 elements_ccextractor_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(AM_CFLAGS)
 elements_ccextractor_LDADD = $(GST_PLUGINS_BASE_LIBS) $(GST_VIDEO_LIBS) $(GST_BASE_LIBS) $(LDADD)
 
+elements_line21_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(AM_CFLAGS)
+elements_line21_LDADD = $(GST_PLUGINS_BASE_LIBS) $(GST_VIDEO_LIBS) $(GST_BASE_LIBS) $(LDADD)
+
+elements_curlhttpsrc_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(GIO_CFLAGS) $(AM_CFLAGS)
+elements_curlhttpsrc_LDADD = $(GST_PLUGINS_BASE_LIBS) $(GST_BASE_LIBS) $(GIO_LIBS) $(LDADD)
+
 elements_jifmux_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(EXIF_CFLAGS) $(AM_CFLAGS)
 elements_jifmux_LDADD = $(GST_PLUGINS_BASE_LIBS) -lgsttag-$(GST_API_VERSION) $(GST_CHECK_LIBS) $(EXIF_LIBS) $(LDADD)
 elements_jifmux_SOURCES = elements/jifmux.c
@@ -560,6 +578,12 @@ elements_rtponvifparse_LDADD = $(GST_PLUGINS_BASE_LIBS) $(GST_BASE_LIBS) $(GST_L
 
 elements_rtponviftimestamp_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(AM_CFLAGS)
 elements_rtponviftimestamp_LDADD = $(GST_PLUGINS_BASE_LIBS) $(GST_BASE_LIBS) $(GST_LIBS) -lgstrtp-$(GST_API_VERSION) $(LDADD)
+
+elements_rtpsrc_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(AM_CFLAGS)
+elements_rtpsrc_LDADD = $(GST_PLUGINS_BASE_LIBS) $(GST_BASE_LIBS) $(GST_LIBS) -lgstrtp-$(GST_API_VERSION) $(LDADD)
+
+elements_rtpsink_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(AM_CFLAGS)
+elements_rtpsink_LDADD = $(GST_PLUGINS_BASE_LIBS) $(GST_BASE_LIBS) $(GST_LIBS) -lgstrtp-$(GST_API_VERSION) $(LDADD)
 
 EXTRA_DIST = gst-plugins-bad.supp $(uvch264_dist_data)
 

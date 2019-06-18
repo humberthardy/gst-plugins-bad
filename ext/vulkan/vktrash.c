@@ -23,7 +23,6 @@
 #endif
 
 #include "vktrash.h"
-#include "vkutils_private.h"
 
 GST_DEBUG_CATEGORY (gst_debug_vulkan_trash);
 #define GST_CAT_DEFAULT gst_debug_vulkan_trash
@@ -139,50 +138,106 @@ gst_vulkan_trash_list_wait (GList * trash_list, guint64 timeout)
   return err == VK_SUCCESS;
 }
 
-static void
-_free_command_buffer (GstVulkanDevice * device, VkCommandBuffer * cmd)
-{
-  g_assert (cmd);
-  vkFreeCommandBuffers (device->device, device->cmd_pool, 1, cmd);
+#define FREE_DESTROY_FUNC(func, type, type_name) \
+static void \
+G_PASTE(_free_,type_name) (GstVulkanDevice * device, type resource) \
+{ \
+  GST_TRACE_OBJECT (device, "Freeing vulkan " G_STRINGIFY (type) " %p", resource); \
+  func (device->device, resource, NULL); \
+} \
+GstVulkanTrash * \
+G_PASTE(gst_vulkan_trash_new_free_,type_name) (GstVulkanFence * fence, \
+    type type_name) \
+{ \
+  GstVulkanTrash *trash; \
+  g_return_val_if_fail (type_name != NULL, NULL); \
+  trash = gst_vulkan_trash_new (fence, \
+      (GstVulkanTrashNotify) G_PASTE(_free_,type_name), type_name); \
+  return trash; \
+}
 
-  g_free (cmd);
+FREE_DESTROY_FUNC (vkDestroyDescriptorPool, VkDescriptorPool, descriptor_pool)
+    FREE_DESTROY_FUNC (vkDestroyDescriptorSetLayout, VkDescriptorSetLayout,
+    descriptor_set_layout)
+    FREE_DESTROY_FUNC (vkDestroyFramebuffer, VkFramebuffer, framebuffer)
+    FREE_DESTROY_FUNC (vkDestroyPipeline, VkPipeline, pipeline)
+    FREE_DESTROY_FUNC (vkDestroyPipelineLayout, VkPipelineLayout, pipeline_layout)
+    FREE_DESTROY_FUNC (vkDestroyRenderPass, VkRenderPass, render_pass)
+    FREE_DESTROY_FUNC (vkDestroySemaphore, VkSemaphore, semaphore)
+    FREE_DESTROY_FUNC (vkDestroySampler, VkSampler, sampler)
+#define FREE_WITH_GST_PARENT(func, type, type_name, parent_type, parent_resource) \
+struct G_PASTE(free_parent_info_,type_name) \
+{ \
+  parent_type parent; \
+  type resource; \
+}; \
+static void \
+G_PASTE(_free_,type_name) (GstVulkanDevice * device, struct G_PASTE(free_parent_info_,type_name) *info) \
+{ \
+  GST_TRACE_OBJECT (device, "Freeing vulkan " G_STRINGIFY (type) " %p", info->resource); \
+  func (device->device, info->parent parent_resource, 1, &info->resource); \
+  gst_object_unref (info->parent); \
+  g_free (info); \
+} \
+GstVulkanTrash * \
+G_PASTE(gst_vulkan_trash_new_free_,type_name) (GstVulkanFence * fence, \
+    parent_type parent, type type_name) \
+{ \
+  struct G_PASTE(free_parent_info_,type_name) *info; \
+  GstVulkanTrash *trash; \
+  g_return_val_if_fail (type_name != NULL, NULL); \
+  info = g_new0 (struct G_PASTE(free_parent_info_,type_name), 1); \
+  info->parent = gst_object_ref (parent); \
+  info->resource = (gpointer) type_name; \
+  trash = gst_vulkan_trash_new (fence, \
+      (GstVulkanTrashNotify) G_PASTE(_free_,type_name), info); \
+  return trash; \
+}
+    FREE_WITH_GST_PARENT (vkFreeCommandBuffers, VkCommandBuffer, command_buffer,
+    GstVulkanCommandPool *,->pool)
+#define FREE_WITH_VK_PARENT(func, type, type_name, parent_type) \
+struct G_PASTE(free_parent_info_,type_name) \
+{ \
+  parent_type parent; \
+  type resource; \
+}; \
+static void \
+G_PASTE(_free_,type_name) (GstVulkanDevice * device, struct G_PASTE(free_parent_info_,type_name) *info) \
+{ \
+  GST_TRACE_OBJECT (device, "Freeing vulkan " G_STRINGIFY (type) " %p", info->resource); \
+  func (device->device, info->parent, 1, &info->resource); \
+  g_free (info); \
+} \
+GstVulkanTrash * \
+G_PASTE(gst_vulkan_trash_new_free_,type_name) (GstVulkanFence * fence, \
+    parent_type parent, type type_name) \
+{ \
+  struct G_PASTE(free_parent_info_,type_name) *info; \
+  GstVulkanTrash *trash; \
+  g_return_val_if_fail (type_name != NULL, NULL); \
+  info = g_new0 (struct G_PASTE(free_parent_info_,type_name), 1); \
+  /* FIXME: keep parent alive ? */\
+  info->parent = parent; \
+  info->resource = (gpointer) type_name; \
+  trash = gst_vulkan_trash_new (fence, \
+      (GstVulkanTrashNotify) G_PASTE(_free_,type_name), info); \
+  return trash; \
+}
+    FREE_WITH_VK_PARENT (vkFreeDescriptorSets, VkDescriptorSet, descriptor_set,
+    VkDescriptorPool)
+
+     static void
+         _trash_object_unref (GstVulkanDevice * device, GstObject * object)
+{
+  gst_object_unref (object);
 }
 
 GstVulkanTrash *
-gst_vulkan_trash_new_free_command_buffer (GstVulkanFence * fence,
-    VkCommandBuffer cmd)
+gst_vulkan_trash_new_object_unref (GstVulkanFence * fence, GstObject * object)
 {
-  VkCommandBuffer *data;
   GstVulkanTrash *trash;
-
-  data = g_new0 (VkCommandBuffer, 1);
-  *data = cmd;
+  g_return_val_if_fail (GST_IS_OBJECT (object), NULL);
   trash = gst_vulkan_trash_new (fence,
-      (GstVulkanTrashNotify) _free_command_buffer, data);
-
-  return trash;
-}
-
-static void
-_free_semaphore (GstVulkanDevice * device, VkSemaphore * semaphore)
-{
-  if (semaphore)
-    vkDestroySemaphore (device->device, *semaphore, NULL);
-
-  g_free (semaphore);
-}
-
-GstVulkanTrash *
-gst_vulkan_trash_new_free_semaphore (GstVulkanFence * fence,
-    VkSemaphore semaphore)
-{
-  VkSemaphore *data;
-  GstVulkanTrash *trash;
-
-  data = g_new0 (VkSemaphore, 1);
-  *data = semaphore;
-  trash = gst_vulkan_trash_new (fence,
-      (GstVulkanTrashNotify) _free_semaphore, data);
-
+      (GstVulkanTrashNotify) _trash_object_unref, object);
   return trash;
 }

@@ -107,12 +107,19 @@ struct _GstMsdkDecClass
   GstVideoDecoderClass parent_class;
 
   gboolean (*configure) (GstMsdkDec * decoder);
+
+  /* reset mfx parameters per codec */
+  gboolean (*preinit_decoder) (GstMsdkDec * decoder);
+  /* adjust mfx parameters per codec */
+  gboolean (*postinit_decoder) (GstMsdkDec * decoder);
 };
 
 struct _MsdkDecTask
 {
   mfxFrameSurface1 *surface;
   mfxSyncPoint sync_point;
+
+  gboolean decode_only;
 };
 
 GType gst_msdkdec_get_type (void);

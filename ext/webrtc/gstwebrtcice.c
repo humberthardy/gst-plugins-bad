@@ -59,6 +59,7 @@ enum
   PROP_TURN_SERVER,
   PROP_CONTROLLER,
   PROP_AGENT,
+  PROP_FORCE_RELAY,
   PROP_MIN_RTP_PORT,
   PROP_MAX_RTP_PORT,
   PROP_MIN_RTCP_PORT,
@@ -83,8 +84,8 @@ struct _GstWebRTCICEPrivate
 #define gst_webrtc_ice_parent_class parent_class
 G_DEFINE_TYPE_WITH_CODE (GstWebRTCICE, gst_webrtc_ice,
     GST_TYPE_OBJECT, G_ADD_PRIVATE (GstWebRTCICE)
-    GST_DEBUG_CATEGORY_INIT (gst_webrtc_ice_debug, "webrtcice", 0, "webrtcice");
-    );
+    GST_DEBUG_CATEGORY_INIT (gst_webrtc_ice_debug, "webrtcice", 0,
+        "webrtcice"););
 
 static gboolean
 _unlock_pc_thread (GMutex * lock)
@@ -414,9 +415,8 @@ _add_stun_server (GstWebRTCICE * ice, GstUri * stun_server)
   gchar *ip = NULL;
   guint port;
 
-  GST_DEBUG_OBJECT (ice, "adding stun server, %s", s);
-
   s = gst_uri_to_string (stun_server);
+  GST_DEBUG_OBJECT (ice, "adding stun server, %s", s);
 
   host = gst_uri_get_host (stun_server);
   if (!host) {
@@ -830,6 +830,10 @@ gst_webrtc_ice_set_property (GObject * object, guint prop_id,
       g_object_set_property (G_OBJECT (ice->priv->nice_agent),
           "controlling-mode", value);
       break;
+    case PROP_FORCE_RELAY:
+      g_object_set_property (G_OBJECT (ice->priv->nice_agent),
+          "force-relay", value);
+      break;
 
     case PROP_MIN_RTP_PORT:
       ice->min_rtp_port = g_value_get_uint (value);
@@ -878,6 +882,10 @@ gst_webrtc_ice_get_property (GObject * object, guint prop_id,
       break;
     case PROP_AGENT:
       g_value_set_object (value, ice->priv->nice_agent);
+      break;
+    case PROP_FORCE_RELAY:
+      g_object_get_property (G_OBJECT (ice->priv->nice_agent),
+          "force-relay", value);
       break;
 
     case PROP_MIN_RTP_PORT:
@@ -962,9 +970,12 @@ gst_webrtc_ice_class_init (GstWebRTCICEClass * klass)
           "ICE agent in use by this object", NICE_TYPE_AGENT,
           G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
 
-  /**
-   * ice rtp and rtcp min and max port selection ranges
-   */
+  g_object_class_install_property (gobject_class,
+      PROP_FORCE_RELAY,
+      g_param_spec_boolean ("force-relay", "Force Relay",
+          "Force all traffic to go through a relay.", FALSE,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   g_object_class_install_property (gobject_class,
       PROP_MIN_RTP_PORT,
       g_param_spec_uint ("min-rtp-port", "ICE RTP candidate min port",
@@ -1001,7 +1012,7 @@ gst_webrtc_ice_class_init (GstWebRTCICEClass * klass)
 
   /**
    * GstWebRTCICE::on-ice-candidate:
-   * @object: the #GstWebRtcBin
+   * @object: the #GstWebRTCBin
    * @candidate: the ICE candidate
    */
   gst_webrtc_ice_signals[ON_ICE_CANDIDATE_SIGNAL] =

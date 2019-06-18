@@ -33,13 +33,8 @@
 #  include <config.h>
 #endif
 
-#ifdef HAVE_MFX_MFXDEFS_H
-#  include <mfx/mfxplugin.h>
-#  include <mfx/mfxvp8.h>
-#else
-#  include "mfxplugin.h"
-#  include "mfxvp8.h"
-#endif
+#include <mfxplugin.h>
+#include <mfxvp8.h>
 
 #include "gstmsdkvp8enc.h"
 
@@ -219,7 +214,7 @@ gst_msdkvp8enc_class_init (GstMsdkVP8EncClass * klass)
 
   gst_element_class_set_static_metadata (element_class,
       "Intel MSDK VP8 encoder",
-      "Codec/Encoder/Video",
+      "Codec/Encoder/Video/Hardware",
       "VP8 video encoder based on Intel Media SDK",
       "Josep Torra <jtorra@oblong.com>");
 

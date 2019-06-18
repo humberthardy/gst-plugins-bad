@@ -65,6 +65,7 @@ struct _GstDecklinkVideoSrc
 
   GstVideoInfo info;
   GstDecklinkVideoFormat video_format;
+  BMDDuplexMode duplex_mode;
   BMDTimecodeFormat timecode_format;
 
   GstDecklinkInput *input;
@@ -98,7 +99,11 @@ struct _GstDecklinkVideoSrc
   GstVideoVBIParser *vbiparser;
   GstVideoFormat anc_vformat;
   gboolean output_cc;
-  guint last_cc_vbi_line;
+  gint last_cc_vbi_line;
+  gint last_cc_vbi_line_field2;
+  gboolean output_afd_bar;
+  gint last_afd_bar_vbi_line;
+  gint last_afd_bar_vbi_line_field2;
 };
 
 struct _GstDecklinkVideoSrcClass

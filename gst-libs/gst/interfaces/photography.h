@@ -50,38 +50,17 @@ G_BEGIN_DECLS
  * Name of custom GstMessage that will be posted to #GstBus when autofocusing
  * is complete.
  * This message contains following fields:
- * <itemizedlist>
- * <listitem>
- *   <para>
- *   #GstPhotographyFocusStatus
- *   <classname>&quot;status&quot;</classname>:
- *   Tells if focusing succeeded or failed.
- *   </para>
- * </listitem>
- * <listitem>
- *   <para>
- *   #G_TYPE_INT
- *   <classname>&quot;focus-window-rows&quot;</classname>:
- *   Tells number of focus matrix rows.
- *   </para>
- * </listitem>
- * <listitem>
- *   <para>
- *   #G_TYPE_INT
- *   <classname>&quot;focus-window-columns&quot;</classname>:
- *   Tells number of focus matrix columns.
- *   </para>
- * </listitem>
- * <listitem>
- *   <para>
- *   #G_TYPE_INT
- *   <classname>&quot;focus-window-mask&quot;</classname>:
- *   Bitmask containing rows x columns bits which mark the focus points in the
- *   focus matrix. Lowest bit (LSB) always represents the top-left corner of the
- *   focus matrix. This field is only valid when focusing status is SUCCESS.
- *   </para>
- * </listitem>
- * </itemizedlist>
+ *
+ * * `status` (#GstPhotographyFocusStatus): Tells if focusing succeeded or failed.
+ *
+ * * `focus-window-rows` (#G_TYPE_INT): Tells number of focus matrix rows.
+ *
+ * * `focus-window-columns` (#G_TYPE_INT): Tells number of focus matrix columns.
+ *
+ * * `focus-window-mask` (#G_TYPE_INT): Bitmask containing rows x columns bits
+ *   which mark the focus points in the focus matrix. Lowest bit (LSB) always
+ *   represents the top-left corner of the focus matrix. This field is only valid
+ *   when focusing status is SUCCESS.
  */
 #define GST_PHOTOGRAPHY_AUTOFOCUS_DONE "autofocus-done"
 
@@ -93,15 +72,8 @@ G_BEGIN_DECLS
  * becoming "shaken" due to camera movement and too long exposure time.
  *
  * This message contains following fields:
- * <itemizedlist>
- * <listitem>
- *   <para>
- *   #GstPhotographyShakeRisk
- *   <classname>&quot;status&quot;</classname>:
- *   Tells risk level of capturing shaken image.
- *   </para>
- * </listitem>
- * </itemizedlist>
+ *
+ * * `status` (#GstPhotographyShakeRisk): Tells risk level of capturing shaken image.
  */
 #define GST_PHOTOGRAPHY_SHAKE_RISK "shake-risk"
 
@@ -179,8 +151,8 @@ typedef enum
  * @GST_PHOTOGRAPHY_WB_MODE_FLUORESCENT: Mode for fluorescent lighting
  * @GST_PHOTOGRAPHY_WB_MODE_MANUAL: Disable automatic white balance adjustment
  * and keep current values.
- * @GST_PHOTOGRAPHY_WB_MODE_WARM_FLUORESCENT: Mode for warm fluorescent lighting (Since 1.2)
- * @GST_PHOTOGRAPHY_WB_MODE_SHADE: Mode for shade lighting (Since 1.2)
+ * @GST_PHOTOGRAPHY_WB_MODE_WARM_FLUORESCENT: Mode for warm fluorescent lighting (Since: 1.2)
+ * @GST_PHOTOGRAPHY_WB_MODE_SHADE: Mode for shade lighting (Since: 1.2)
  *
  * Modes for white balance control.
  */
@@ -211,10 +183,10 @@ typedef enum
  * @GST_PHOTOGRAPHY_COLOR_TONE_MODE_SKY_BLUE: Sky blue
  * @GST_PHOTOGRAPHY_COLOR_TONE_MODE_GRASS_GREEN: Grass green
  * @GST_PHOTOGRAPHY_COLOR_TONE_MODE_SKIN_WHITEN: Skin whiten
- * @GST_PHOTOGRAPHY_COLOR_TONE_MODE_POSTERIZE: Posterize (Since 1.2)
- * @GST_PHOTOGRAPHY_COLOR_TONE_MODE_WHITEBOARD: Whiteboard (Since 1.2)
- * @GST_PHOTOGRAPHY_COLOR_TONE_MODE_BLACKBOARD: Blackboard (Since 1.2)
- * @GST_PHOTOGRAPHY_COLOR_TONE_MODE_AQUA: Aqua (Since 1.2)
+ * @GST_PHOTOGRAPHY_COLOR_TONE_MODE_POSTERIZE: Posterize (Since: 1.2)
+ * @GST_PHOTOGRAPHY_COLOR_TONE_MODE_WHITEBOARD: Whiteboard (Since: 1.2)
+ * @GST_PHOTOGRAPHY_COLOR_TONE_MODE_BLACKBOARD: Blackboard (Since: 1.2)
+ * @GST_PHOTOGRAPHY_COLOR_TONE_MODE_AQUA: Aqua (Since: 1.2)
  *
  * Modes for special color effects.
  */
@@ -248,22 +220,22 @@ typedef enum
  * @GST_PHOTOGRAPHY_SCENE_MODE_NIGHT: Mode for night conditions
  * @GST_PHOTOGRAPHY_SCENE_MODE_AUTO: Choose scene mode automatically
  * @GST_PHOTOGRAPHY_SCENE_MODE_ACTION: Take photos of fast moving
- *     objects (Since 1.2)
+ *     objects (Since: 1.2)
  * @GST_PHOTOGRAPHY_SCENE_MODE_NIGHT_PORTRAIT: Take people pictures
- *     at night (Since 1.2)
- * @GST_PHOTOGRAPHY_SCENE_MODE_THEATRE: Take photos in a theater (Since 1.2)
- * @GST_PHOTOGRAPHY_SCENE_MODE_BEACH: Take pictures on the beach (Since 1.2)
- * @GST_PHOTOGRAPHY_SCENE_MODE_SNOW: Take pictures on the snow (Since 1.2)
- * @GST_PHOTOGRAPHY_SCENE_MODE_SUNSET: Take sunset photos (Since 1.2)
+ *     at night (Since: 1.2)
+ * @GST_PHOTOGRAPHY_SCENE_MODE_THEATRE: Take photos in a theater (Since: 1.2)
+ * @GST_PHOTOGRAPHY_SCENE_MODE_BEACH: Take pictures on the beach (Since: 1.2)
+ * @GST_PHOTOGRAPHY_SCENE_MODE_SNOW: Take pictures on the snow (Since: 1.2)
+ * @GST_PHOTOGRAPHY_SCENE_MODE_SUNSET: Take sunset photos (Since: 1.2)
  * @GST_PHOTOGRAPHY_SCENE_MODE_STEADY_PHOTO: Avoid blurry pictures
- *     (for example, due to hand shake) (Since 1.2)
+ *     (for example, due to hand shake) (Since: 1.2)
  * @GST_PHOTOGRAPHY_SCENE_MODE_FIREWORKS: For shooting firework
- *     displays (Since 1.2)
- * @GST_PHOTOGRAPHY_SCENE_MODE_PARTY: Take indoor low-light shot (Since 1.2)
+ *     displays (Since: 1.2)
+ * @GST_PHOTOGRAPHY_SCENE_MODE_PARTY: Take indoor low-light shot (Since: 1.2)
  * @GST_PHOTOGRAPHY_SCENE_MODE_CANDLELIGHT: Capture the naturally warm color
- *     of scenes lit by candles (Since 1.2)
+ *     of scenes lit by candles (Since: 1.2)
  * @GST_PHOTOGRAPHY_SCENE_MODE_BARCODE: Applications are looking for
- *     a barcode (Since 1.2)
+ *     a barcode (Since: 1.2)
  *
  * Each mode contains preset #GstPhotography options in order to produce
  * good capturing result in certain scene.

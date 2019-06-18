@@ -1,12 +1,10 @@
-DISTCHECK_CONFIGURE_FLAGS=--enable-gtk-doc
-
 SUBDIRS = \
 	gst-libs gst sys ext pkgconfig \
-	m4 common docs tests po tools
+	m4 common tests po tools
 
 DIST_SUBDIRS = \
 	gst gst-libs sys ext pkgconfig \
-	m4 common docs tests po tools
+	m4 common tests po tools
 
 EXTRA_DIST = \
 	depcomp \
@@ -14,7 +12,7 @@ EXTRA_DIST = \
 	ChangeLog gst-plugins-bad.doap autogen.sh \
 	$(shell find "$(top_srcdir)" -type f -name meson.build ! -path "$(top_srcdir)/$(PACKAGE_TARNAME)-*" ) \
 	meson_options.txt \
-	ext/vulkan/vkconfig.h.meson
+	gst-libs/gst/vulkan/gstvkconfig.h.meson
 
 DISTCLEANFILES = _stdint.h
 
@@ -46,7 +44,6 @@ CRUFT_FILES = \
 	$(top_builddir)/gst-plugins-bad.spec \
 	$(top_builddir)/common/shave \
 	$(top_builddir)/common/shave-libtool \
-	$(top_builddir)/docs/plugins/xml/plugin-sdp.xml \
 	$(top_builddir)/ext/alsaspdif/.libs/*.{so,dll,DLL,dylib} \
 	$(top_builddir)/ext/gtk/.libs/libgstgtksink.so \
 	$(top_builddir)/ext/gtk/.libs/libgstgtk.so \
@@ -69,7 +66,6 @@ CRUFT_FILES = \
 	$(top_builddir)/gst/mpeg4videoparse/.libs/*.{so,dll,DLL,dylib} \
 	$(top_builddir)/gst/qtmux/.libs/*.{so,dll,DLL,dylib} \
 	$(top_builddir)/gst/rawparse/.libs/libgstrawparse* \
-	$(top_builddir)/gst/rtp/.libs/*.{so,dll,DLL,dylib} \
 	$(top_builddir)/gst/rtpmux/.libs/*.{so,dll,DLL,dylib} \
 	$(top_builddir)/gst/rtpvp8/.libs/*.{so,dll,DLL,dylib} \
 	$(top_builddir)/gst/scaletempo/.libs/*.{so,dll,DLL,dylib} \
@@ -102,7 +98,6 @@ CRUFT_FILES = \
 	$(top_builddir)/tests/icles/equalizer-test
 
 CRUFT_DIRS = \
-	$(top_srcdir)/docs/plugins/tmpl \
 	$(top_srcdir)/gst/aacparse \
 	$(top_srcdir)/gst/amrparse \
 	$(top_srcdir)/gst/audiomixer \
@@ -117,7 +112,6 @@ CRUFT_DIRS = \
 	$(top_srcdir)/gst/qtmux \
 	$(top_srcdir)/gst/rtpmux \
 	$(top_srcdir)/gst/rtpvp8 \
-	$(top_srcdir)/gst/rtp \
 	$(top_srcdir)/gst/scaletempo \
 	$(top_srcdir)/gst/selector \
 	$(top_srcdir)/gst/shapewipe \

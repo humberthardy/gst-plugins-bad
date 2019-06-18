@@ -36,7 +36,6 @@ libopencv_headers = [
   'opencv2/bgsegm.hpp',
   'opencv2/calib3d.hpp',
   'opencv2/core.hpp',
-  'opencv2/imgcodecs/imgcodecs_c.h',
   'opencv2/imgproc.hpp',
   'opencv2/objdetect.hpp',
   'opencv2/opencv.hpp',
@@ -47,10 +46,6 @@ libopencv4_headers = [
   'opencv4/opencv2/bgsegm.hpp',
   'opencv4/opencv2/calib3d.hpp',
   'opencv4/opencv2/core.hpp',
-  'opencv4/opencv2/imgcodecs/legacy/constants_c.h',
-  'opencv4/opencv2/imgproc/imgproc_c.h',
-  'opencv4/opencv2/core/types_c.h',
-  'opencv4/opencv2/core/core_c.h',
   'opencv4/opencv2/imgproc.hpp',
   'opencv4/opencv2/objdetect.hpp',
   'opencv4/opencv2/opencv.hpp',
@@ -70,7 +65,7 @@ if opencv_found
     endif
   endforeach
 else
-  opencv_dep = dependency('opencv4', version : ['>= 4.0.0', '< 4.1.0'], required : false)
+  opencv_dep = dependency('opencv4', version : ['>= 4.0.0', '< 4.2.0'], required : false)
   opencv_found = opencv_dep.found()
   if opencv_found
     foreach h : libopencv4_headers
@@ -114,6 +109,7 @@ if opencv_found
     install_dir : plugins_install_dir,
   )
   pkgconfig.generate(gstopencv, install_dir : plugins_pkgconfig_install_dir)
+  plugins += [gstopencv]
 elif get_option('opencv').enabled()
   error('OpenCV support enabled but required dependencies were not found.')
 endif

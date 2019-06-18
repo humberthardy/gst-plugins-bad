@@ -97,7 +97,7 @@ plugin_init (GstPlugin * plugin)
   GST_DEBUG_CATEGORY_INIT (gst_msdkvp8dec_debug, "msdkvp8dec", 0, "msdkvp8dec");
   GST_DEBUG_CATEGORY_INIT (gst_msdkvp8enc_debug, "msdkvp8enc", 0, "msdkvp8enc");
   GST_DEBUG_CATEGORY_INIT (gst_msdkvc1dec_debug, "msdkvc1dec", 0, "msdkvc1dec");
-  GST_DEBUG_CATEGORY_INIT (gst_msdkvp8dec_debug, "msdkvp9dec", 0, "msdkvp8dec");
+  GST_DEBUG_CATEGORY_INIT (gst_msdkvp9dec_debug, "msdkvp9dec", 0, "msdkvp9dec");
 
   if (!msdk_is_available ())
     return FALSE;
@@ -149,4 +149,4 @@ GST_PLUGIN_DEFINE (GST_VERSION_MAJOR,
     GST_VERSION_MINOR,
     msdk,
     "Intel Media SDK based elements",
-    plugin_init, VERSION, "BSD", GST_PACKAGE_NAME, GST_PACKAGE_ORIGIN)
+    plugin_init, VERSION, "LGPL", GST_PACKAGE_NAME, GST_PACKAGE_ORIGIN)

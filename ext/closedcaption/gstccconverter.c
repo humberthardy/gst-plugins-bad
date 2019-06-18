@@ -467,7 +467,7 @@ convert_cea708_cc_data_cea708_cdp_internal (GstCCConverter * self,
   } else if (self->fps_n == 25 && self->fps_d == 1) {
     gst_byte_writer_put_uint8_unchecked (&bw, 0x3f);
     cc_count = 24;
-  } else if (self->fps_n == 30 && self->fps_d == 1001) {
+  } else if (self->fps_n == 30000 && self->fps_d == 1001) {
     gst_byte_writer_put_uint8_unchecked (&bw, 0x4f);
     cc_count = 20;
   } else if (self->fps_n == 30 && self->fps_d == 1) {
@@ -569,7 +569,7 @@ convert_cea708_cdp_cea708_cc_data_internal (GstCCConverter * self,
   guint8 u8;
   guint8 flags;
   gint fps_n, fps_d;
-  guint len;
+  guint len = 0;
 
   memset (tc, 0, sizeof (*tc));
 
@@ -1292,7 +1292,8 @@ gst_cc_converter_transform (GstBaseTransform * base, GstBuffer * inbuf,
 
   GST_DEBUG_OBJECT (self, "Converted to %" GST_PTR_FORMAT, outbuf);
 
-  return GST_FLOW_OK;
+  return gst_buffer_get_size (outbuf) >
+      0 ? GST_FLOW_OK : GST_BASE_TRANSFORM_FLOW_DROPPED;
 }
 
 static gboolean

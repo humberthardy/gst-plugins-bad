@@ -45,7 +45,7 @@ G_DEFINE_TYPE (GstNvH264Enc, gst_nv_h264_enc, GST_TYPE_NV_BASE_ENC);
   ";" \
   "video/x-raw(memory:GLMemory), " \
   "format = (string) { NV12, Y444 }, " \
-  "width = (int) [ 16, 4096 ], height = (int) [ 16, 2160 ], " \
+  "width = (int) [ 16, 4096 ], height = (int) [ 16, 4096 ], " \
   "framerate = (fraction) [0, MAX]," \
   "interlace-mode = { progressive, mixed, interleaved } "
 #else
@@ -56,8 +56,8 @@ G_DEFINE_TYPE (GstNvH264Enc, gst_nv_h264_enc, GST_TYPE_NV_BASE_ENC);
 static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS ("video/x-raw, " "format = (string) { NV12, I420 }, "       // TODO: YV12, Y444 support
-        "width = (int) [ 16, 4096 ], height = (int) [ 16, 2160 ], "
+    GST_STATIC_CAPS ("video/x-raw, " "format = (string) { NV12, I420, Y444 }, "
+        "width = (int) [ 16, 4096 ], height = (int) [ 16, 4096 ], "
         "framerate = (fraction) [0, MAX],"
         "interlace-mode = { progressive, mixed, interleaved } "
         GL_CAPS_STR
@@ -67,7 +67,7 @@ static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS ("video/x-h264, "
-        "width = (int) [ 1, 4096 ], height = (int) [ 1, 2160 ], "
+        "width = (int) [ 1, 4096 ], height = (int) [ 1, 4096 ], "
         "framerate = (fraction) [0/1, MAX], "
         "stream-format = (string) byte-stream, " // TODO: avc support
         "alignment = (string) au, "
@@ -118,7 +118,7 @@ gst_nv_h264_enc_class_init (GstNvH264EncClass * klass)
 
   gst_element_class_set_static_metadata (element_class,
       "NVENC H.264 Video Encoder",
-      "Codec/Encoder/Video",
+      "Codec/Encoder/Video/Hardware",
       "Encode H.264 video streams using NVIDIA's hardware-accelerated NVENC encoder API",
       "Tim-Philipp Müller <tim@centricular.com>\n"
       "Matthew Waters <matthew@centricular.com>");
@@ -146,6 +146,9 @@ _get_supported_profiles (GstNvH264Enc * nvenc)
   GValue list = G_VALUE_INIT;
   GValue val = G_VALUE_INIT;
   guint i, n, n_profiles;
+
+  if (nvenc->supported_profiles)
+    return TRUE;
 
   nv_ret =
       NvEncGetEncodeProfileGUIDCount (GST_NV_BASE_ENC (nvenc)->encoder,
@@ -189,8 +192,8 @@ _get_supported_profiles (GstNvH264Enc * nvenc)
     return FALSE;
 
   GST_OBJECT_LOCK (nvenc);
-  g_free (nvenc->supported_profiles);
-  nvenc->supported_profiles = g_memdup (&list, sizeof (GValue));
+  nvenc->supported_profiles = g_new0 (GValue, 1);
+  *nvenc->supported_profiles = list;
   GST_OBJECT_UNLOCK (nvenc);
 
   return TRUE;
@@ -239,6 +242,8 @@ gst_nv_h264_enc_close (GstVideoEncoder * enc)
   GstNvH264Enc *nvenc = GST_NV_H264_ENC (enc);
 
   GST_OBJECT_LOCK (nvenc);
+  if (nvenc->supported_profiles)
+    g_value_unset (nvenc->supported_profiles);
   g_free (nvenc->supported_profiles);
   nvenc->supported_profiles = NULL;
   GST_OBJECT_UNLOCK (nvenc);
@@ -272,6 +277,7 @@ _get_interlace_modes (GstNvH264Enc * nvenc)
     gst_value_list_append_value (list, &val);
     g_value_set_static_string (&val, "mixed");
     gst_value_list_append_value (list, &val);
+    g_value_unset (&val);
   }
   /* TODO: figure out what nvenc frame based interlacing means in gst terms */
 
@@ -297,6 +303,7 @@ gst_nv_h264_enc_getcaps (GstVideoEncoder * enc, GstCaps * filter)
 
     val = _get_interlace_modes (nvenc);
     gst_caps_set_value (supported_incaps, "interlace-mode", val);
+    g_value_unset (val);
     g_free (val);
 
     GST_LOG_OBJECT (enc, "codec input caps %" GST_PTR_FORMAT, supported_incaps);
@@ -503,7 +510,7 @@ gst_nv_h264_enc_set_encoder_config (GstNvBaseEnc * nvenc,
   config->encodeCodecConfig.h264Config.chromaFormatIDC = 1;
   if (GST_VIDEO_INFO_FORMAT (info) == GST_VIDEO_FORMAT_Y444) {
     GST_DEBUG_OBJECT (h264enc, "have Y444 input, setting config accordingly");
-    config->encodeCodecConfig.h264Config.separateColourPlaneFlag = 1;
+    config->profileGUID = NV_ENC_H264_PROFILE_HIGH_444_GUID;
     config->encodeCodecConfig.h264Config.chromaFormatIDC = 3;
   }
 

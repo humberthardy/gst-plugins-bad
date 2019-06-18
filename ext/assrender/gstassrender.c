@@ -358,10 +358,10 @@ gst_ass_render_pop_text (GstAssRender * render)
 {
   while (render->subtitle_pending) {
     GST_DEBUG_OBJECT (render, "releasing text buffer %p",
-        render->subtitle_pending);
+        render->subtitle_pending->data);
     gst_buffer_unref (render->subtitle_pending->data);
     render->subtitle_pending =
-        g_slist_remove_link (render->subtitle_pending,
+        g_slist_delete_link (render->subtitle_pending,
         render->subtitle_pending);
   }
 
@@ -1165,6 +1165,7 @@ gst_ass_render_chain_video (GstPad * pad, GstObject * parent,
   gboolean in_seg = FALSE;
   guint64 start, stop, clip_start = 0, clip_stop = 0;
   ASS_Image *ass_image;
+  guint n = 0;
 
   if (gst_pad_check_reconfigure (render->srcpad)) {
     if (!gst_ass_render_negotiate (render, NULL)) {
@@ -1253,7 +1254,15 @@ wait_for_text_buf:
           gst_segment_to_running_time (&render->video_segment, GST_FORMAT_TIME,
           stop);
 
+      GST_LOG_OBJECT (render, "V : %" GST_TIME_FORMAT " - %" GST_TIME_FORMAT,
+          GST_TIME_ARGS (vid_running_time),
+          GST_TIME_ARGS (vid_running_time_end));
+
+      if (subtitle_pending == NULL)
+        GST_LOG_OBJECT (render, "T : no pending subtitles");
+
       while (subtitle_pending != NULL) {
+        ++n;
 
         /* if the text buffer isn't stamped right, pop it off the
          * queue and display it for the current video frame only */
@@ -1263,9 +1272,9 @@ wait_for_text_buf:
           GST_WARNING_OBJECT (render,
               "Got text buffer with invalid timestamp or duration");
           gst_buffer_unref (bad->data);
-          subtitle_pending = bad->next;
+          bad = subtitle_pending->next;
           render->subtitle_pending =
-              g_slist_remove_link (render->subtitle_pending, bad);
+              g_slist_delete_link (render->subtitle_pending, bad);
           GST_ASS_RENDER_BROADCAST (render);
           continue;
         }
@@ -1275,18 +1284,15 @@ wait_for_text_buf:
 
         /* If timestamp and duration are valid */
         text_running_time =
-            gst_segment_to_running_time (&render->video_segment,
+            gst_segment_to_running_time (&render->subtitle_segment,
             GST_FORMAT_TIME, text_start);
         text_running_time_end =
-            gst_segment_to_running_time (&render->video_segment,
+            gst_segment_to_running_time (&render->subtitle_segment,
             GST_FORMAT_TIME, text_end);
 
-        GST_LOG_OBJECT (render, "T: %" GST_TIME_FORMAT " - %" GST_TIME_FORMAT,
-            GST_TIME_ARGS (text_running_time),
+        GST_LOG_OBJECT (render, "T%u: %" GST_TIME_FORMAT " - "
+            "%" GST_TIME_FORMAT, n, GST_TIME_ARGS (text_running_time),
             GST_TIME_ARGS (text_running_time_end));
-        GST_LOG_OBJECT (render, "V: %" GST_TIME_FORMAT " - %" GST_TIME_FORMAT,
-            GST_TIME_ARGS (vid_running_time),
-            GST_TIME_ARGS (vid_running_time_end));
 
         /* Text too old */
         if (text_running_time_end <= vid_running_time) {
@@ -1295,7 +1301,7 @@ wait_for_text_buf:
           gst_buffer_unref (old->data);
           subtitle_pending = old->next;
           render->subtitle_pending =
-              g_slist_remove_link (render->subtitle_pending, old);
+              g_slist_delete_link (render->subtitle_pending, old);
           GST_ASS_RENDER_BROADCAST (render);
           continue;
         }
@@ -1356,7 +1362,7 @@ wait_for_text_buf:
           gst_buffer_unref (old->data);
           subtitle_pending = old->next;
           render->subtitle_pending =
-              g_slist_remove_link (render->subtitle_pending, old);
+              g_slist_delete_link (render->subtitle_pending, old);
           GST_ASS_RENDER_BROADCAST (render);
           GST_ASS_RENDER_UNLOCK (render);
           render->need_process = TRUE;
@@ -1735,7 +1741,6 @@ gst_ass_render_query_video (GstPad * pad, GstObject * parent, GstQuery * query)
 static gboolean
 gst_ass_render_event_text (GstPad * pad, GstObject * parent, GstEvent * event)
 {
-  gint i;
   gboolean ret = FALSE;
   GstAssRender *render = GST_ASS_RENDER (parent);
 
@@ -1806,6 +1811,11 @@ gst_ass_render_event_text (GstPad * pad, GstObject * parent, GstEvent * event)
       break;
     }
     case GST_EVENT_FLUSH_STOP:
+      g_mutex_lock (&render->ass_mutex);
+      if (render->ass_track) {
+        ass_flush_events (render->ass_track);
+      }
+      g_mutex_unlock (&render->ass_mutex);
       GST_ASS_RENDER_LOCK (render);
       GST_INFO_OBJECT (render, "text flush stop");
       render->subtitle_flushing = FALSE;
@@ -1818,17 +1828,6 @@ gst_ass_render_event_text (GstPad * pad, GstObject * parent, GstEvent * event)
       break;
     case GST_EVENT_FLUSH_START:
       GST_DEBUG_OBJECT (render, "text flush start");
-      g_mutex_lock (&render->ass_mutex);
-      if (render->ass_track) {
-        /* delete any events on the ass_track */
-        for (i = 0; i < render->ass_track->n_events; i++) {
-          GST_DEBUG_OBJECT (render, "deleted event with eid %i", i);
-          ass_free_event (render->ass_track, i);
-        }
-        render->ass_track->n_events = 0;
-        GST_DEBUG_OBJECT (render, "done flushing");
-      }
-      g_mutex_unlock (&render->ass_mutex);
       GST_ASS_RENDER_LOCK (render);
       render->subtitle_flushing = TRUE;
       GST_ASS_RENDER_BROADCAST (render);

@@ -123,6 +123,7 @@ gst_cea708dec_clear_window_text (Cea708Dec * decoder, guint window_id);
 static void
 gst_cea708dec_scroll_window_up (Cea708Dec * decoder, guint window_id);
 static void gst_cea708dec_init_window (Cea708Dec * decoder, guint window_id);
+static void gst_cea708dec_clear_window (Cea708Dec * decoder, cea708Window * w);
 static void
 gst_cea708dec_set_pen_attributes (Cea708Dec * decoder,
     guint8 * dtvcc_buffer, int index);
@@ -172,6 +173,20 @@ gst_cea708dec_create (PangoContext * pango_context)
   decoder->use_ARGB = FALSE;
   decoder->pango_context = pango_context;
   return decoder;
+}
+
+void
+gst_cea708dec_free (Cea708Dec * dec)
+{
+  int i;
+
+  for (i = 0; i < MAX_708_WINDOWS; i++) {
+    cea708Window *window = dec->cc_windows[i];
+    gst_cea708dec_clear_window (dec, window);
+    g_free (window);
+  }
+  memset (dec, 0, sizeof (Cea708Dec));
+  g_free (dec);
 }
 
 void
@@ -1299,6 +1314,13 @@ gst_cea708dec_scroll_window_up (Cea708Dec * decoder, guint window_id)
 }
 
 static void
+gst_cea708dec_clear_window (Cea708Dec * decoder, cea708Window * window)
+{
+  g_free (window->text_image);
+  memset (window, 0, sizeof (cea708Window));
+}
+
+static void
 gst_cea708dec_init_window (Cea708Dec * decoder, guint window_id)
 {
   cea708Window *window = decoder->cc_windows[window_id];
@@ -1380,9 +1402,9 @@ gst_cea708dec_set_pen_attributes (Cea708Dec * decoder,
      tt3 tt2 tt1 tt0 o1 o0 s1 s0
      i u et2 et1 et0 fs2 fs1 fs0 */
   window->pen_attributes.pen_size = dtvcc_buffer[index] & 0x3;
-  window->pen_attributes.font_style = dtvcc_buffer[index + 1] & 0x3;
   window->pen_attributes.text_tag = (dtvcc_buffer[index] & 0xF0) >> 4;
   window->pen_attributes.offset = (dtvcc_buffer[index] & 0xC0) >> 2;
+  window->pen_attributes.font_style = dtvcc_buffer[index + 1] & 0x7;
   window->pen_attributes.italics =
       ((dtvcc_buffer[index + 1] & 0x80) >> 7) ? TRUE : FALSE;
   window->pen_attributes.underline =

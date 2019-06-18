@@ -520,6 +520,95 @@ _nal_name (GstH264NalUnitType nal_type)
 #endif
 
 static void
+gst_h264_parse_process_sei_user_data (GstH264Parse * h264parse,
+    GstH264RegisteredUserData * rud)
+{
+  guint16 provider_code;
+  guint32 atsc_user_id;
+  GstByteReader br;
+
+  if (rud->country_code != 0xB5)
+    return;
+
+  if (rud->data == NULL || rud->size < 2)
+    return;
+
+  gst_byte_reader_init (&br, rud->data, rud->size);
+
+  provider_code = gst_byte_reader_get_uint16_be_unchecked (&br);
+
+  /* There is also 0x29 / 47 for DirecTV, but we don't handle that for now.
+   * https://en.wikipedia.org/wiki/CEA-708#Picture_User_Data */
+  if (provider_code != 0x0031)
+    return;
+
+  /* ANSI/SCTE 128-2010a section 8.1.2 */
+  if (!gst_byte_reader_get_uint32_be (&br, &atsc_user_id))
+    return;
+
+  atsc_user_id = GUINT32_FROM_BE (atsc_user_id);
+  switch (atsc_user_id) {
+    case GST_MAKE_FOURCC ('G', 'A', '9', '4'):{
+      guint8 user_data_type_code, m;
+
+      /* 8.2.1 ATSC1_data() Semantics, Table 15 */
+      if (!gst_byte_reader_get_uint8 (&br, &user_data_type_code))
+        return;
+
+      switch (user_data_type_code) {
+        case 0x03:{
+          guint8 process_cc_data_flag;
+          guint8 cc_count, em_data, b;
+          guint i;
+
+          if (!gst_byte_reader_get_uint8 (&br, &b) || (b & 0x20) != 0)
+            break;
+
+          if (!gst_byte_reader_get_uint8 (&br, &em_data) || em_data != 0xff)
+            break;
+
+          process_cc_data_flag = (b & 0x40) != 0;
+          cc_count = b & 0x1f;
+
+          if (cc_count * 3 > gst_byte_reader_get_remaining (&br))
+            break;
+
+          if (!process_cc_data_flag || cc_count == 0) {
+            gst_byte_reader_skip_unchecked (&br, cc_count * 3);
+            break;
+          }
+
+          /* Shouldn't really happen so let's not go out of our way to handle it */
+          if (h264parse->closedcaptions_size > 0) {
+            GST_WARNING_OBJECT (h264parse, "unused pending closed captions!");
+            GST_MEMDUMP_OBJECT (h264parse, "unused captions being dropped",
+                h264parse->closedcaptions, h264parse->closedcaptions_size);
+          }
+
+          for (i = 0; i < cc_count * 3; i++) {
+            h264parse->closedcaptions[i] =
+                gst_byte_reader_get_uint8_unchecked (&br);
+          }
+          h264parse->closedcaptions_size = cc_count * 3;
+          h264parse->closedcaptions_type = GST_VIDEO_CAPTION_TYPE_CEA708_RAW;
+
+          GST_LOG_OBJECT (h264parse, "Extracted closed captions");
+          break;
+        }
+        default:
+          GST_LOG ("Unhandled atsc1 user data type %d", atsc_user_id);
+          break;
+      }
+      if (!gst_byte_reader_get_uint8 (&br, &m) || m != 0xff)
+        GST_WARNING_OBJECT (h264parse, "Marker bits mismatch after ATSC1_data");
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+static void
 gst_h264_parse_process_sei (GstH264Parse * h264parse, GstH264NalUnit * nalu)
 {
   GstH264SEIMessage sei;
@@ -539,13 +628,33 @@ gst_h264_parse_process_sei (GstH264Parse * h264parse, GstH264NalUnit * nalu)
     sei = g_array_index (messages, GstH264SEIMessage, i);
     switch (sei.payloadType) {
       case GST_H264_SEI_PIC_TIMING:
+      {
+        guint j;
         h264parse->sei_pic_struct_pres_flag =
             sei.payload.pic_timing.pic_struct_present_flag;
         h264parse->sei_cpb_removal_delay =
             sei.payload.pic_timing.cpb_removal_delay;
-        if (h264parse->sei_pic_struct_pres_flag)
+        if (h264parse->sei_pic_struct_pres_flag) {
           h264parse->sei_pic_struct = sei.payload.pic_timing.pic_struct;
+        }
+
+        h264parse->num_clock_timestamp = 0;
+
+        for (j = 0; j < 3; j++) {
+          if (sei.payload.pic_timing.clock_timestamp_flag[j]) {
+            memcpy (&h264parse->clock_timestamp[h264parse->
+                    num_clock_timestamp++],
+                &sei.payload.pic_timing.clock_timestamp[j],
+                sizeof (GstH264ClockTimestamp));
+          }
+        }
+
         GST_LOG_OBJECT (h264parse, "pic timing updated");
+        break;
+      }
+      case GST_H264_SEI_REGISTERED_USER_DATA:
+        gst_h264_parse_process_sei_user_data (h264parse,
+            &sei.payload.registered_user_data);
         break;
       case GST_H264_SEI_BUF_PERIOD:
         if (h264parse->ts_trn_nb == GST_CLOCK_TIME_NONE ||
@@ -587,7 +696,7 @@ gst_h264_parse_process_sei (GstH264Parse * h264parse, GstH264NalUnit * nalu)
         if (sei.payload.stereo_video_info.field_views_flag) {
           mview_mode = GST_VIDEO_MULTIVIEW_MODE_ROW_INTERLEAVED;
           if (!sei.payload.stereo_video_info.top_field_is_left_view_flag)
-            mview_mode |= GST_VIDEO_MULTIVIEW_FLAGS_RIGHT_VIEW_FIRST;
+            mview_flags |= GST_VIDEO_MULTIVIEW_FLAGS_RIGHT_VIEW_FIRST;
         } else {
           mview_mode = GST_VIDEO_MULTIVIEW_MODE_FRAME_BY_FRAME;
           if (sei.payload.stereo_video_info.next_frame_is_second_view_flag) {
@@ -740,6 +849,8 @@ gst_h264_parse_process_nal (GstH264Parse * h264parse, GstH264NalUnit * nalu)
       /* arranged for a fallback sps.id, so use that one and only warn */
       if (pres != GST_H264_PARSER_OK) {
         GST_WARNING_OBJECT (h264parse, "failed to parse SPS:");
+        h264parse->state |= GST_H264_PARSE_STATE_GOT_SPS;
+        h264parse->header |= TRUE;
         return FALSE;
       }
 
@@ -1204,6 +1315,8 @@ gst_h264_parse_handle_frame (GstBaseParse * parse,
         /* broken nal at start -> arrange to skip it,
          * otherwise have it terminate current au
          * (and so it will be skipped on next frame round) */
+        GST_ELEMENT_WARNING (h264parse, STREAM, DECODE,
+            (NULL), ("Broken bit stream"));
         if (current_off == 0) {
           GST_DEBUG_OBJECT (h264parse, "skipping broken nal");
           *skipsize = nalu.offset;
@@ -1894,15 +2007,20 @@ gst_h264_parse_update_src_caps (GstH264Parse * h264parse, GstCaps * caps)
           "height", G_TYPE_INT, height, NULL);
 
       /* upstream overrides */
-      if (s && gst_structure_has_field (s, "framerate"))
+      if (s && gst_structure_has_field (s, "framerate")) {
         gst_structure_get_fraction (s, "framerate", &fps_num, &fps_den);
+      }
 
       /* but not necessarily or reliably this */
       if (fps_den > 0) {
+        GstStructure *s2;
         gst_caps_set_simple (caps, "framerate",
             GST_TYPE_FRACTION, fps_num, fps_den, NULL);
-        gst_base_parse_set_frame_rate (GST_BASE_PARSE (h264parse),
-            fps_num, fps_den, 0, 0);
+        s2 = gst_caps_get_structure (caps, 0);
+        gst_structure_get_fraction (s2, "framerate", &h264parse->parsed_fps_n,
+            &h264parse->parsed_fps_d);
+        gst_base_parse_set_frame_rate (GST_BASE_PARSE (h264parse), fps_num,
+            fps_den, 0, 0);
         if (fps_num > 0) {
           latency = gst_util_uint64_scale (GST_SECOND, fps_den, fps_num);
           gst_base_parse_set_latency (GST_BASE_PARSE (h264parse), latency,
@@ -2465,6 +2583,15 @@ gst_h264_parse_pre_push_frame (GstBaseParse * parse, GstBaseParseFrame * frame)
     buffer = frame->buffer;
   }
 
+  if (h264parse->closedcaptions_size > 0) {
+    gst_buffer_add_video_caption_meta (buffer,
+        h264parse->closedcaptions_type, h264parse->closedcaptions,
+        h264parse->closedcaptions_size);
+
+    h264parse->closedcaptions_type = GST_VIDEO_CAPTION_TYPE_UNKNOWN;
+    h264parse->closedcaptions_size = 0;
+  }
+
   if ((event = check_pending_key_unit_event (h264parse->force_key_unit_event,
               &parse->segment, GST_BUFFER_TIMESTAMP (buffer),
               GST_BUFFER_FLAGS (buffer), h264parse->pending_key_unit_ts))) {
@@ -2549,6 +2676,72 @@ gst_h264_parse_pre_push_frame (GstBaseParse * parse, GstBaseParseFrame * frame)
     }
   }
 #endif
+
+  {
+    guint i = 0;
+
+    for (i = 0; i < h264parse->num_clock_timestamp; i++) {
+      GstH264ClockTimestamp *tim = &h264parse->clock_timestamp[i];
+      GstVideoTimeCodeFlags flags = 0;
+      gint field_count = -1;
+      guint n_frames;
+
+      /* Table D-1 */
+      switch (h264parse->sei_pic_struct) {
+        case GST_H264_SEI_PIC_STRUCT_FRAME:
+        case GST_H264_SEI_PIC_STRUCT_TOP_FIELD:
+        case GST_H264_SEI_PIC_STRUCT_BOTTOM_FIELD:
+          field_count = h264parse->sei_pic_struct;
+          break;
+        case GST_H264_SEI_PIC_STRUCT_TOP_BOTTOM:
+          field_count = i + 1;
+          break;
+        case GST_H264_SEI_PIC_STRUCT_BOTTOM_TOP:
+          field_count = 2 - i;
+          break;
+        case GST_H264_SEI_PIC_STRUCT_TOP_BOTTOM_TOP:
+          field_count = i % 2 ? 2 : 1;
+          break;
+        case GST_H264_SEI_PIC_STRUCT_BOTTOM_TOP_BOTTOM:
+          field_count = i % 2 ? 1 : 2;
+          break;
+        case GST_H264_SEI_PIC_STRUCT_FRAME_DOUBLING:
+        case GST_H264_SEI_PIC_STRUCT_FRAME_TRIPLING:
+          field_count = 0;
+          break;
+      }
+
+      if (field_count == -1) {
+        GST_WARNING_OBJECT (parse,
+            "failed to determine field count for timecode");
+        field_count = 0;
+      }
+
+      /* dropping of the two lowest (value 0 and 1) n_frames
+       * counts when seconds_value is equal to 0 and
+       * minutes_value is not an integer multiple of 10 */
+      if (tim->counting_type == 4)
+        flags |= GST_VIDEO_TIME_CODE_FLAGS_DROP_FRAME;
+
+      if (tim->ct_type == GST_H264_CT_TYPE_INTERLACED)
+        flags |= GST_VIDEO_TIME_CODE_FLAGS_INTERLACED;
+
+      n_frames =
+          gst_util_uint64_scale_int (tim->n_frames, 1,
+          2 - tim->nuit_field_based_flag);
+
+      gst_buffer_add_video_time_code_meta_full (buffer,
+          h264parse->parsed_fps_n,
+          h264parse->parsed_fps_d,
+          NULL,
+          flags,
+          tim->hours_flag ? tim->hours_value : 0,
+          tim->minutes_flag ? tim->minutes_value : 0,
+          tim->seconds_flag ? tim->seconds_value : 0, n_frames, field_count);
+    }
+
+    h264parse->num_clock_timestamp = 0;
+  }
 
   gst_h264_parse_reset_frame (h264parse);
 

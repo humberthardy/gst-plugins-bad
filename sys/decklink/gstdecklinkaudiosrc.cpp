@@ -17,6 +17,23 @@
  * Free Software Foundation, Inc., 51 Franklin Street, Suite 500,
  * Boston, MA 02110-1335, USA.
  */
+/**
+ * SECTION:element-decklinkaudiosrc
+ * @short_description: Inputs Audio from a BlackMagic DeckLink Device
+ * @see_also: decklinkvideosrc
+ *
+ * Capture Video and Audio from a BlackMagic DeckLink Device. Can only be used
+ * in conjunction with decklinkvideosink.
+ *
+ * ## Sample pipeline
+ * |[
+ * gst-launch-1.0 \
+ *   decklinkvideosrc device-number=0 mode=1080p25 ! autovideosink \
+ *   decklinkaudiosrc device-number=0 ! autoaudiosink
+ * ]|
+ * Capturing 1080p25 video and audio from the SDI-In of Card 0. Devices are numbered
+ * starting with 0.
+ */
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -197,7 +214,8 @@ gst_decklink_audio_src_class_init (GstDecklinkAudioSrcClass * klass)
   gst_element_class_add_static_pad_template (element_class, &sink_template);
 
   gst_element_class_set_static_metadata (element_class, "Decklink Audio Source",
-      "Audio/Src", "Decklink Source", "David Schleef <ds@entropywave.com>, "
+      "Audio/Source/Hardware", "Decklink Source",
+      "David Schleef <ds@entropywave.com>, "
       "Sebastian Dröge <sebastian@centricular.com>");
 
   GST_DEBUG_CATEGORY_INIT (gst_decklink_audio_src_debug, "decklinkaudiosrc",

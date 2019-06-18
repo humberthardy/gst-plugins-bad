@@ -39,7 +39,7 @@
  *
  *   * From #GST_H265_NAL_SLICE_TRAIL_N to #GST_H265_NAL_SLICE_CRA_NUT: gst_h265_parser_parse_slice_hdr()
  *
- *   * #GST_H265_NAL_SEI: gst_h265_parser_parse_sei()
+ *   * `GST_H265_NAL_*_SEI`: gst_h265_parser_parse_sei()
  *
  *   * #GST_H265_NAL_VPS: gst_h265_parser_parse_vps()
  *
@@ -72,16 +72,24 @@
 #include <string.h>
 #include <math.h>
 
-GST_DEBUG_CATEGORY_STATIC (h265_parser_debug);
-#define GST_CAT_DEFAULT h265_parser_debug
+#ifndef GST_DISABLE_GST_DEBUG
+#define GST_CAT_DEFAULT gst_h265_debug_category_get()
+static GstDebugCategory *
+gst_h265_debug_category_get (void)
+{
+  static gsize cat_gonce = 0;
 
-static gboolean initialized = FALSE;
-#define INITIALIZE_DEBUG_CATEGORY \
-  if (!initialized) { \
-    GST_DEBUG_CATEGORY_INIT (h265_parser_debug, "codecparsers_h265", 0, \
-        "h265 parser library"); \
-    initialized = TRUE; \
+  if (g_once_init_enter (&cat_gonce)) {
+    GstDebugCategory *cat = NULL;
+
+    GST_DEBUG_CATEGORY_INIT (cat, "codecparsers_h265", 0, "h265 parse library");
+
+    g_once_init_leave (&cat_gonce, (gsize) cat);
   }
+
+  return (GstDebugCategory *) cat_gonce;
+}
+#endif /* GST_DISABLE_GST_DEBUG */
 
 /**** Default scaling_lists according to Table 7-5 and 7-6 *****/
 
@@ -1124,6 +1132,105 @@ error:
   return GST_H265_PARSER_ERROR;
 }
 
+static GstH265ParserResult
+gst_h265_parser_parse_time_code (GstH265Parser * parser,
+    GstH265TimeCode * tc, NalReader * nr)
+{
+  guint i;
+
+  GST_DEBUG ("parsing \"Time code\"");
+
+  READ_UINT8 (nr, tc->num_clock_ts, 2);
+
+  for (i = 0; i < tc->num_clock_ts; i++) {
+    READ_UINT8 (nr, tc->clock_timestamp_flag[i], 1);
+    if (tc->clock_timestamp_flag[i]) {
+      READ_UINT8 (nr, tc->units_field_based_flag[i], 1);
+      READ_UINT8 (nr, tc->counting_type[i], 5);
+      READ_UINT8 (nr, tc->full_timestamp_flag[i], 1);
+      READ_UINT8 (nr, tc->discontinuity_flag[i], 1);
+      READ_UINT8 (nr, tc->cnt_dropped_flag[i], 1);
+      READ_UINT16 (nr, tc->n_frames[i], 9);
+
+      if (tc->full_timestamp_flag[i]) {
+        tc->seconds_flag[i] = TRUE;
+        READ_UINT8 (nr, tc->seconds_value[i], 6);
+
+        tc->minutes_flag[i] = TRUE;
+        READ_UINT8 (nr, tc->minutes_value[i], 6);
+
+        tc->hours_flag[i] = TRUE;
+        READ_UINT8 (nr, tc->hours_value[i], 5);
+      } else {
+        READ_UINT8 (nr, tc->seconds_flag[i], 1);
+        if (tc->seconds_flag[i]) {
+          READ_UINT8 (nr, tc->seconds_value[i], 6);
+          READ_UINT8 (nr, tc->minutes_flag[i], 1);
+          if (tc->minutes_flag[i]) {
+            READ_UINT8 (nr, tc->minutes_value[i], 6);
+            READ_UINT8 (nr, tc->hours_flag[i], 1);
+            if (tc->hours_flag[i]) {
+              READ_UINT8 (nr, tc->hours_value[i], 5);
+            }
+          }
+        }
+      }
+    }
+
+    READ_UINT8 (nr, tc->time_offset_length[i], 5);
+
+    if (tc->time_offset_length[i] > 0)
+      READ_UINT32 (nr, tc->time_offset_value[i], tc->time_offset_length[i]);
+  }
+
+  return GST_H265_PARSER_OK;
+
+error:
+  GST_WARNING ("error parsing \"Time code\"");
+  return GST_H265_PARSER_ERROR;
+}
+
+static GstH265ParserResult
+gst_h265_parser_parse_mastering_display_colour_volume (GstH265Parser * parser,
+    GstH265MasteringDisplayColourVolume * mdcv, NalReader * nr)
+{
+  guint i;
+
+  GST_DEBUG ("parsing \"Mastering display colour volume\"");
+
+  for (i = 0; i < 3; i++) {
+    READ_UINT16 (nr, mdcv->display_primaries_x[i], 16);
+    READ_UINT16 (nr, mdcv->display_primaries_y[i], 16);
+  }
+
+  READ_UINT16 (nr, mdcv->white_point_x, 16);
+  READ_UINT16 (nr, mdcv->white_point_y, 16);
+  READ_UINT32 (nr, mdcv->max_display_mastering_luminance, 32);
+  READ_UINT32 (nr, mdcv->min_display_mastering_luminance, 32);
+
+  return GST_H265_PARSER_OK;
+
+error:
+  GST_WARNING ("error parsing \"Mastering display colour volume\"");
+  return GST_H265_PARSER_ERROR;
+}
+
+static GstH265ParserResult
+gst_h265_parser_parse_content_light_level_info (GstH265Parser * parser,
+    GstH265ContentLightLevel * cll, NalReader * nr)
+{
+  GST_DEBUG ("parsing \"Content light level\"");
+
+  READ_UINT16 (nr, cll->max_content_light_level, 16);
+  READ_UINT16 (nr, cll->max_pic_average_light_level, 16);
+
+  return GST_H265_PARSER_OK;
+
+error:
+  GST_WARNING ("error parsing \"Content light level\"");
+  return GST_H265_PARSER_ERROR;
+}
+
 /******** API *************/
 
 /**
@@ -1140,7 +1247,6 @@ gst_h265_parser_new (void)
   GstH265Parser *parser;
 
   parser = g_slice_new0 (GstH265Parser);
-  INITIALIZE_DEBUG_CATEGORY;
 
   return parser;
 }
@@ -1415,7 +1521,6 @@ gst_h265_parse_vps (GstH265NalUnit * nalu, GstH265VPS * vps)
   NalReader nr;
   guint i, j;
 
-  INITIALIZE_DEBUG_CATEGORY;
   GST_DEBUG ("parsing VPS");
 
   nal_reader_init (&nr, nalu->data + nalu->offset + nalu->header_bytes,
@@ -1594,7 +1699,6 @@ gst_h265_parse_sps (GstH265Parser * parser, GstH265NalUnit * nalu,
   guint subhc[] = { 1, 2, 1, 1, 1 };
   GstH265VUIParams *vui = NULL;
 
-  INITIALIZE_DEBUG_CATEGORY;
   GST_DEBUG ("parsing SPS");
 
   nal_reader_init (&nr, nalu->data + nalu->offset + nalu->header_bytes,
@@ -1717,6 +1821,31 @@ gst_h265_parse_sps (GstH265Parser * parser, GstH265NalUnit * nalu,
 
   READ_UINT8 (&nr, sps->sps_extension_flag, 1);
 
+  if (sps->sps_extension_flag) {
+    READ_UINT8 (&nr, sps->sps_range_extension_flag, 1);
+    READ_UINT8 (&nr, sps->sps_multilayer_extension_flag, 1);
+    READ_UINT8 (&nr, sps->sps_3d_extension_flag, 1);
+    READ_UINT8 (&nr, sps->sps_extension_5bits, 5);
+  }
+
+  if (sps->sps_range_extension_flag) {
+    READ_UINT8 (&nr,
+        sps->sps_extnsion_params.transform_skip_rotation_enabled_flag, 1);
+    READ_UINT8 (&nr,
+        sps->sps_extnsion_params.transform_skip_context_enabled_flag, 1);
+    READ_UINT8 (&nr, sps->sps_extnsion_params.implicit_rdpcm_enabled_flag, 1);
+    READ_UINT8 (&nr, sps->sps_extnsion_params.explicit_rdpcm_enabled_flag, 1);
+    READ_UINT8 (&nr,
+        sps->sps_extnsion_params.extended_precision_processing_flag, 1);
+    READ_UINT8 (&nr, sps->sps_extnsion_params.intra_smoothing_disabled_flag, 1);
+    READ_UINT8 (&nr,
+        sps->sps_extnsion_params.high_precision_offsets_enabled_flag, 1);
+    READ_UINT8 (&nr,
+        sps->sps_extnsion_params.persistent_rice_adaptation_enabled_flag, 1);
+    READ_UINT8 (&nr,
+        sps->sps_extnsion_params.cabac_bypass_alignment_enabled_flag, 1);
+  }
+
   /* calculate ChromaArrayType */
   if (!sps->separate_colour_plane_flag)
     sps->chroma_array_type = sps->chroma_format_idc;
@@ -1755,8 +1884,12 @@ gst_h265_parse_sps (GstH265Parser * parser, GstH265NalUnit * nalu,
         && !vui->field_seq_flag && !vui->frame_field_info_present_flag) {
       sps->fps_num = vui->time_scale;
       sps->fps_den = vui->num_units_in_tick;
-      GST_LOG ("framerate %d/%d", sps->fps_num, sps->fps_den);
+      GST_LOG ("framerate %d/%d in VUI", sps->fps_num, sps->fps_den);
     }
+  } else if (vps && vps->timing_info_present_flag) {
+    sps->fps_num = vps->time_scale;
+    sps->fps_den = vps->num_units_in_tick;
+    GST_LOG ("framerate %d/%d in VPS", sps->fps_num, sps->fps_den);
   } else {
     GST_LOG ("No VUI, unknown framerate");
   }
@@ -1789,10 +1922,9 @@ gst_h265_parse_pps (GstH265Parser * parser, GstH265NalUnit * nalu,
   GstH265SPS *sps;
   gint sps_id;
   gint qp_bd_offset;
-  guint32 CtbSizeY, MinCbLog2SizeY, CtbLog2SizeY;
+  guint32 CtbSizeY, MinCbLog2SizeY, CtbLog2SizeY, MaxBitDepthY, MaxBitDepthC;
   guint8 i;
 
-  INITIALIZE_DEBUG_CATEGORY;
   GST_DEBUG ("parsing PPS");
 
   nal_reader_init (&nr, nalu->data + nalu->offset + nalu->header_bytes,
@@ -1919,6 +2051,45 @@ gst_h265_parse_pps (GstH265Parser * parser, GstH265NalUnit * nalu,
   READ_UINT8 (&nr, pps->slice_segment_header_extension_present_flag, 1);
   READ_UINT8 (&nr, pps->pps_extension_flag, 1);
 
+  if (pps->pps_extension_flag) {
+    READ_UINT8 (&nr, pps->pps_range_extension_flag, 1);
+    READ_UINT8 (&nr, pps->pps_multilayer_extension_flag, 1);
+    READ_UINT8 (&nr, pps->pps_3d_extension_flag, 1);
+    READ_UINT8 (&nr, pps->pps_extension_5bits, 5);
+  }
+
+  if (pps->pps_range_extension_flag) {
+    READ_UE (&nr,
+        pps->pps_extension_params.log2_max_transform_skip_block_size_minus2);
+    READ_UINT8 (&nr,
+        pps->pps_extension_params.cross_component_prediction_enabled_flag, 1);
+    READ_UINT8 (&nr,
+        pps->pps_extension_params.chroma_qp_offset_list_enabled_flag, 1);
+    if (pps->pps_extension_params.chroma_qp_offset_list_enabled_flag) {
+      READ_UE_MAX (&nr,
+          pps->pps_extension_params.diff_cu_chroma_qp_offset_depth,
+          sps->log2_diff_max_min_luma_coding_block_size);
+      READ_UE_MAX (&nr,
+          pps->pps_extension_params.chroma_qp_offset_list_len_minus1, 5);
+      for (i = 0;
+          i <= pps->pps_extension_params.chroma_qp_offset_list_len_minus1;
+          i++) {
+        READ_SE_ALLOWED (&nr, pps->pps_extension_params.cb_qp_offset_list[i],
+            -12, 12);
+        READ_SE_ALLOWED (&nr, pps->pps_extension_params.cr_qp_offset_list[i],
+            -12, 12);
+      }
+    }
+    MaxBitDepthY =
+        sps->bit_depth_luma_minus8 > 2 ? sps->bit_depth_luma_minus8 - 2 : 0;
+    MaxBitDepthC =
+        sps->bit_depth_chroma_minus8 > 2 ? sps->bit_depth_chroma_minus8 - 2 : 0;
+    READ_UE_ALLOWED (&nr, pps->pps_extension_params.log2_sao_offset_scale_luma,
+        0, MaxBitDepthY);
+    READ_UE_ALLOWED (&nr,
+        pps->pps_extension_params.log2_sao_offset_scale_chroma, 0,
+        MaxBitDepthC);
+  }
   pps->valid = TRUE;
   return GST_H265_PARSER_OK;
 
@@ -1956,7 +2127,7 @@ gst_h265_parser_parse_pps (GstH265Parser * parser,
 /**
  * gst_h265_parser_parse_slice_hdr:
  * @parser: a #GstH265Parser
- * @nalu: The #GST_H265_NAL_SLICE #GstH265NalUnit to parse
+ * @nalu: The `GST_H265_NAL_SLICE` #GstH265NalUnit to parse
  * @slice: The #GstH265SliceHdr to fill.
  *
  * Parses @data, and fills the @slice structure.
@@ -2183,6 +2354,9 @@ gst_h265_parser_parse_slice_hdr (GstH265Parser * parser,
       READ_SE_ALLOWED (&nr, slice->cr_qp_offset, -12, 12);
     }
 
+    if (pps->pps_extension_params.chroma_qp_offset_list_enabled_flag)
+      READ_UINT8 (&nr, slice->cu_chroma_qp_offset_enabled_flag, 1);
+
     if (pps->deblocking_filter_override_enabled_flag)
       READ_UINT8 (&nr, slice->deblocking_filter_override_flag, 1);
     if (slice->deblocking_filter_override_flag) {
@@ -2311,6 +2485,18 @@ gst_h265_parser_parse_sei_message (GstH265Parser * parser,
       case GST_H265_SEI_RECOVERY_POINT:
         res = gst_h265_parser_parse_recovery_point (parser,
             &sei->payload.recovery_point, nr);
+        break;
+      case GST_H265_SEI_TIME_CODE:
+        res = gst_h265_parser_parse_time_code (parser,
+            &sei->payload.time_code, nr);
+        break;
+      case GST_H265_SEI_MASTERING_DISPLAY_COLOUR_VOLUME:
+        res = gst_h265_parser_parse_mastering_display_colour_volume (parser,
+            &sei->payload.mastering_display_colour_volume, nr);
+        break;
+      case GST_H265_SEI_CONTENT_LIGHT_LEVEL:
+        res = gst_h265_parser_parse_content_light_level_info (parser,
+            &sei->payload.content_light_level, nr);
         break;
       default:
         /* Just consume payloadSize bytes, which does not account for
@@ -2478,7 +2664,7 @@ gst_h265_sei_free (GstH265SEIMessage * sei)
 /**
  * gst_h265_parser_parse_sei:
  * @nalparser: a #GstH265Parser
- * @nalu: The #GST_H265_NAL_SEI #GstH265NalUnit to parse
+ * @nalu: The `GST_H265_NAL_*_SEI` #GstH265NalUnit to parse
  * @messages: The GArray of #GstH265SEIMessage to fill. The caller must free it when done.
  *
  * Parses @data, create and fills the @messages array.
@@ -2716,7 +2902,9 @@ gst_h265_quant_matrix_8x8_get_raster_from_uprightdiagonal (guint8 out_quant[64],
 typedef struct
 {
   GstH265Profile profile;
+  GstH265ProfileIDC profile_idc;
 
+  guint8 max_14bit_constraint_flag;
   guint8 max_12bit_constraint_flag;
   guint8 max_10bit_constraint_flag;
   guint8 max_8bit_constraint_flag;
@@ -2755,28 +2943,127 @@ get_format_range_extension_profile (GstH265ProfileTierLevel * ptl)
 {
   /* See Table A.2 for the definition of those formats */
   FormatRangeExtensionProfile profiles[] = {
-    {GST_H265_PROFILE_MONOCHROME, 1, 1, 1, 1, 1, 1, 0, 0, TRUE, 0},
-    {GST_H265_PROFILE_MONOCHROME_12, 1, 0, 0, 1, 1, 1, 0, 0, TRUE, 1},
-    {GST_H265_PROFILE_MONOCHROME_16, 0, 0, 0, 1, 1, 1, 0, 0, TRUE, 2},
-    {GST_H265_PROFILE_MAIN_12, 1, 0, 0, 1, 1, 0, 0, 0, TRUE, 3},
-    {GST_H265_PROFILE_MAIN_422_10, 1, 1, 0, 1, 0, 0, 0, 0, TRUE, 4},
-    {GST_H265_PROFILE_MAIN_422_12, 1, 0, 0, 1, 0, 0, 0, 0, TRUE, 5},
-    {GST_H265_PROFILE_MAIN_444, 1, 1, 1, 0, 0, 0, 0, 0, TRUE, 6},
-    {GST_H265_PROFILE_MAIN_444_10, 1, 1, 0, 0, 0, 0, 0, 0, TRUE, 7},
-    {GST_H265_PROFILE_MAIN_444_12, 1, 0, 0, 0, 0, 0, 0, 0, TRUE, 8},
-    {GST_H265_PROFILE_MAIN_INTRA, 1, 1, 1, 1, 1, 0, 1, 0, FALSE, 9},
-    {GST_H265_PROFILE_MAIN_10_INTRA, 1, 1, 0, 1, 1, 0, 1, 0, FALSE, 10},
-    {GST_H265_PROFILE_MAIN_12_INTRA, 1, 0, 0, 1, 1, 0, 1, 0, FALSE, 11},
-    {GST_H265_PROFILE_MAIN_422_10_INTRA, 1, 1, 0, 1, 0, 0, 1, 0, FALSE, 12},
-    {GST_H265_PROFILE_MAIN_422_12_INTRA, 1, 0, 0, 1, 0, 0, 1, 0, FALSE, 13},
-    {GST_H265_PROFILE_MAIN_444_INTRA, 1, 1, 1, 0, 0, 0, 1, 0, FALSE, 14},
-    {GST_H265_PROFILE_MAIN_444_10_INTRA, 1, 1, 0, 0, 0, 0, 1, 0, FALSE, 15},
-    {GST_H265_PROFILE_MAIN_444_12_INTRA, 1, 0, 0, 0, 0, 0, 1, 0, FALSE, 16},
-    {GST_H265_PROFILE_MAIN_444_16_INTRA, 0, 0, 0, 0, 0, 0, 1, 0, FALSE, 17},
-    {GST_H265_PROFILE_MAIN_444_STILL_PICTURE, 1, 1, 1, 0, 0, 0, 1, 1, FALSE,
-        18},
-    {GST_H265_PROFILE_MAIN_444_16_STILL_PICTURE, 0, 0, 0, 0, 0, 0, 1, 1, FALSE,
-        19},
+    {GST_H265_PROFILE_MONOCHROME, GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION,
+        0, 1, 1, 1, 1, 1, 1, 0, 0, TRUE, 0},
+    {GST_H265_PROFILE_MONOCHROME_10,
+          GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION,
+        0, 1, 1, 0, 1, 1, 1, 0, 0, TRUE, 1},
+    {GST_H265_PROFILE_MONOCHROME_12,
+          GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION,
+        0, 1, 0, 0, 1, 1, 1, 0, 0, TRUE, 2},
+    {GST_H265_PROFILE_MONOCHROME_16,
+          GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION,
+        0, 0, 0, 0, 1, 1, 1, 0, 0, TRUE, 3},
+    {GST_H265_PROFILE_MAIN_12, GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION,
+        0, 1, 0, 0, 1, 1, 0, 0, 0, TRUE, 4},
+    {GST_H265_PROFILE_MAIN_422_10, GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION,
+        0, 1, 1, 0, 1, 0, 0, 0, 0, TRUE, 5},
+    {GST_H265_PROFILE_MAIN_422_12, GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION,
+        0, 1, 0, 0, 1, 0, 0, 0, 0, TRUE, 6},
+    {GST_H265_PROFILE_MAIN_444, GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION,
+        0, 1, 1, 1, 0, 0, 0, 0, 0, TRUE, 7},
+    {GST_H265_PROFILE_MAIN_444_10, GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION,
+        0, 1, 1, 0, 0, 0, 0, 0, 0, TRUE, 8},
+    {GST_H265_PROFILE_MAIN_444_12, GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION,
+        0, 1, 0, 0, 0, 0, 0, 0, 0, TRUE, 9},
+    {GST_H265_PROFILE_MAIN_INTRA, GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION,
+        0, 1, 1, 1, 1, 1, 0, 1, 0, FALSE, 10},
+    {GST_H265_PROFILE_MAIN_10_INTRA,
+          GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION,
+        0, 1, 1, 0, 1, 1, 0, 1, 0, FALSE, 11},
+    {GST_H265_PROFILE_MAIN_12_INTRA,
+          GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION,
+        0, 1, 0, 0, 1, 1, 0, 1, 0, FALSE, 12},
+    {GST_H265_PROFILE_MAIN_422_10_INTRA,
+          GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION,
+        0, 1, 1, 0, 1, 0, 0, 1, 0, FALSE, 13},
+    {GST_H265_PROFILE_MAIN_422_12_INTRA,
+          GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION,
+        0, 1, 0, 0, 1, 0, 0, 1, 0, FALSE, 14},
+    {GST_H265_PROFILE_MAIN_444_INTRA,
+          GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION,
+        0, 1, 1, 1, 0, 0, 0, 1, 0, FALSE, 15},
+    {GST_H265_PROFILE_MAIN_444_10_INTRA,
+          GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION,
+        0, 1, 1, 0, 0, 0, 0, 1, 0, FALSE, 16},
+    {GST_H265_PROFILE_MAIN_444_12_INTRA,
+          GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION,
+        0, 1, 0, 0, 0, 0, 0, 1, 0, FALSE, 17},
+    {GST_H265_PROFILE_MAIN_444_16_INTRA,
+          GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION,
+        0, 0, 0, 0, 0, 0, 0, 1, 0, FALSE, 18},
+    {GST_H265_PROFILE_MAIN_444_STILL_PICTURE,
+          GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION,
+        0, 1, 1, 1, 0, 0, 0, 1, 1, FALSE, 19},
+    {GST_H265_PROFILE_MAIN_444_16_STILL_PICTURE,
+          GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION,
+        0, 0, 0, 0, 0, 0, 0, 1, 1, FALSE, 20},
+
+    /* High Througput */
+    {GST_H265_PROFILE_HIGH_THROUGHPUT_444, GST_H265_PROFILE_IDC_HIGH_THROUGHPUT,
+        1, 1, 1, 1, 0, 0, 0, 0, 0, TRUE, 21},
+    {GST_H265_PROFILE_HIGH_THROUGHPUT_444_10,
+          GST_H265_PROFILE_IDC_HIGH_THROUGHPUT,
+        1, 1, 1, 0, 0, 0, 0, 0, 0, TRUE, 22},
+    {GST_H265_PROFILE_HIGH_THROUGHPUT_444_14,
+          GST_H265_PROFILE_IDC_HIGH_THROUGHPUT,
+        1, 0, 0, 0, 0, 0, 0, 0, 0, TRUE, 23},
+    {GST_H265_PROFILE_HIGH_THROUGHPUT_444_16_INTRA,
+          GST_H265_PROFILE_IDC_HIGH_THROUGHPUT,
+        0, 0, 0, 0, 0, 0, 0, 1, 0, FALSE, 24},
+
+    /* Screen content coding */
+    {GST_H265_PROFILE_SCREEN_EXTENDED_MAIN,
+          GST_H265_PROFILE_IDC_SCREEN_CONTENT_CODING,
+        1, 1, 1, 1, 1, 1, 0, 0, 0, TRUE, 25},
+    {GST_H265_PROFILE_SCREEN_EXTENDED_MAIN_10,
+          GST_H265_PROFILE_IDC_SCREEN_CONTENT_CODING,
+        1, 1, 1, 0, 1, 1, 0, 0, 0, TRUE, 26},
+    {GST_H265_PROFILE_SCREEN_EXTENDED_MAIN_444,
+          GST_H265_PROFILE_IDC_SCREEN_CONTENT_CODING,
+        1, 1, 1, 1, 0, 0, 0, 0, 0, TRUE, 27},
+    {GST_H265_PROFILE_SCREEN_EXTENDED_MAIN_444_10,
+          GST_H265_PROFILE_IDC_SCREEN_CONTENT_CODING,
+        1, 1, 1, 0, 0, 0, 0, 0, 0, TRUE, 28},
+    /* identical to screen-extended-main-444 */
+    {GST_H265_PROFILE_SCREEN_EXTENDED_HIGH_THROUGHPUT_444,
+          GST_H265_PROFILE_IDC_SCREEN_CONTENT_CODING,
+        1, 1, 1, 1, 0, 0, 0, 0, 0, TRUE, 29},
+    /* identical to screen-extended-main-444-10 */
+    {GST_H265_PROFILE_SCREEN_EXTENDED_HIGH_THROUGHPUT_444_10,
+          GST_H265_PROFILE_IDC_SCREEN_CONTENT_CODING,
+        1, 1, 1, 0, 0, 0, 0, 0, 0, TRUE, 30},
+    {GST_H265_PROFILE_SCREEN_EXTENDED_HIGH_THROUGHPUT_444_14,
+          GST_H265_PROFILE_IDC_SCREEN_CONTENT_CODING,
+        1, 0, 0, 0, 0, 0, 0, 0, 0, TRUE, 31},
+
+    /* Multiview Main */
+    {GST_H265_PROFILE_MULTIVIEW_MAIN, GST_H265_PROFILE_IDC_MULTIVIEW_MAIN,
+        0, 1, 1, 1, 1, 1, 0, 0, 0, TRUE, 32},
+
+    /* Scalable Main */
+    {GST_H265_PROFILE_SCALABLE_MAIN, GST_H265_PROFILE_IDC_SCALABLE_MAIN,
+        0, 1, 1, 1, 1, 1, 0, 0, 0, TRUE, 33},
+    {GST_H265_PROFILE_SCALABLE_MAIN_10, GST_H265_PROFILE_IDC_SCALABLE_MAIN,
+        0, 1, 1, 0, 1, 1, 0, 0, 0, TRUE, 34},
+
+    /* Scalable format range extensions */
+    {GST_H265_PROFILE_SCALABLE_MONOCHROME,
+          GST_H265_PROFILE_IDC_SCALABLE_FORMAT_RANGE_EXTENSION,
+        1, 1, 1, 1, 1, 1, 1, 0, 0, TRUE, 35},
+    {GST_H265_PROFILE_SCALABLE_MONOCHROME_12,
+          GST_H265_PROFILE_IDC_SCALABLE_FORMAT_RANGE_EXTENSION,
+        1, 1, 0, 0, 1, 1, 1, 0, 0, TRUE, 36},
+    {GST_H265_PROFILE_SCALABLE_MONOCHROME_16,
+          GST_H265_PROFILE_IDC_SCALABLE_FORMAT_RANGE_EXTENSION,
+        0, 0, 0, 0, 1, 1, 1, 0, 0, TRUE, 37},
+    {GST_H265_PROFILE_SCALABLE_MAIN_444,
+          GST_H265_PROFILE_IDC_SCALABLE_FORMAT_RANGE_EXTENSION,
+        1, 1, 1, 1, 0, 0, 0, 0, 0, TRUE, 38},
+
+    /* 3D Main */
+    {GST_H265_PROFILE_3D_MAIN, GST_H265_PROFILE_IDC_3D_MAIN,
+        0, 1, 1, 1, 1, 1, 0, 0, 0, TRUE, 39},
   };
   GstH265Profile result = GST_H265_PROFILE_INVALID;
   guint i;
@@ -2791,6 +3078,12 @@ get_format_range_extension_profile (GstH265ProfileTierLevel * ptl)
      * Then pick the one having the least extra contraints. This allow us
      * to match the closet profile if bitstream contains not standard
      * constraints. */
+    if (p.max_14bit_constraint_flag != ptl->max_14bit_constraint_flag) {
+      if (p.max_14bit_constraint_flag)
+        continue;
+      extra_constraints++;
+    }
+
     if (p.max_12bit_constraint_flag != ptl->max_12bit_constraint_flag) {
       if (p.max_12bit_constraint_flag)
         continue;
@@ -2844,20 +3137,29 @@ get_format_range_extension_profile (GstH265ProfileTierLevel * ptl)
         && !ptl->lower_bit_rate_constraint_flag)
       continue;
 
+    if (extra_constraints == 0 &&
+        (p.profile_idc == ptl->profile_idc
+            || ptl->profile_compatibility_flag[ptl->profile_idc])) {
+      result = p.profile;
+      break;
+    }
+
     m = g_new0 (FormatRangeExtensionProfileMatch, 1);
     m->profile = &profiles[i];
     m->extra_constraints = extra_constraints;
     matches = g_list_prepend (matches, m);
   }
 
-  if (matches) {
+  if (result == GST_H265_PROFILE_INVALID && matches) {
     FormatRangeExtensionProfileMatch *m;
 
     matches = g_list_sort (matches, (GCompareFunc) sort_fre_profile_matches);
     m = matches->data;
     result = m->profile->profile;
-    g_list_free_full (matches, g_free);
   }
+
+  if (matches)
+    g_list_free_full (matches, g_free);
 
   return result;
 }
@@ -2886,14 +3188,5 @@ gst_h265_profile_tier_level_get_profile (GstH265ProfileTierLevel * ptl)
       || ptl->profile_compatibility_flag[3])
     return GST_H265_PROFILE_MAIN_STILL_PICTURE;
 
-  if (ptl->profile_idc == GST_H265_PROFILE_IDC_FORMAT_RANGE_EXTENSION
-      || ptl->profile_compatibility_flag[4])
-    return get_format_range_extension_profile (ptl);
-
-  /* TODO:
-   * - GST_H265_PROFILE_IDC_HIGH_THROUGHPUT
-   * - GST_H265_PROFILE_IDC_SCREEN_CONTENT_CODING
-   */
-
-  return GST_H265_PROFILE_INVALID;
+  return get_format_range_extension_profile (ptl);
 }

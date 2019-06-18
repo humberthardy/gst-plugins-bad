@@ -113,6 +113,31 @@ ensure_data (GstMsdkSystemMemory * mem)
       mem->surface->Data.B = mem->surface->Data.R + 2;
       mem->surface->Data.Pitch = mem->destination_pitches[0];
       break;
+#if (MFX_VERSION >= 1028)
+    case GST_VIDEO_FORMAT_RGB16:
+      mem->surface->Data.R = mem->cached_data[0];
+      mem->surface->Data.G = mem->surface->Data.R;
+      mem->surface->Data.B = mem->surface->Data.R;
+      mem->surface->Data.Pitch = mem->destination_pitches[0];
+      break;
+#endif
+    case GST_VIDEO_FORMAT_VUYA:
+      mem->surface->Data.V = mem->cached_data[0];
+      mem->surface->Data.U = mem->surface->Data.V + 1;
+      mem->surface->Data.Y = mem->surface->Data.V + 2;
+      mem->surface->Data.A = mem->surface->Data.V + 3;
+      mem->surface->Data.PitchHigh =
+          (mfxU16) (mem->destination_pitches[0] / (1 << 16));
+      mem->surface->Data.PitchLow =
+          (mfxU16) (mem->destination_pitches[0] % (1 << 16));
+      break;
+    case GST_VIDEO_FORMAT_BGR10A2_LE:
+      mem->surface->Data.R = mem->cached_data[0];
+      mem->surface->Data.G = mem->surface->Data.R;
+      mem->surface->Data.B = mem->surface->Data.R;
+      mem->surface->Data.A = mem->surface->Data.R;
+      mem->surface->Data.Pitch = mem->destination_pitches[0];
+      break;
     default:
       g_assert_not_reached ();
       break;
@@ -192,7 +217,11 @@ gst_msdk_system_memory_map_full (GstMemory * base_mem, GstMapInfo * info,
     return NULL;
   }
 
-  return mem->surface->Data.Y;
+  /* The first channel in memory is V for MFX_FOURCC_AYUV (GST_VIDEO_FORMAT_VUYA) format */
+  if (mem->surface->Info.FourCC == MFX_FOURCC_AYUV)
+    return mem->surface->Data.V;
+  else
+    return mem->surface->Data.Y;
 }
 
 static void

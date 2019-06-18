@@ -370,12 +370,6 @@ else
 DTLS_DIR=
 endif
 
-if USE_VULKAN
-VULKAN_DIR=vulkan
-else
-VULKAN_DIR=
-endif
-
 if USE_WEBRTCDSP
 WEBRTCDSP_DIR=webrtcdsp
 else
@@ -392,6 +386,12 @@ if USE_TTML
 TTML_DIR=ttml
 else
 TTML_DIR=
+endif
+
+if USE_WPE
+WPE_DIR=wpe
+else
+WPE_DIR=
 endif
 
 SUBDIRS=\
@@ -458,10 +458,10 @@ SUBDIRS=\
 	$(WEBP_DIR) \
 	$(X265_DIR) \
 	$(DTLS_DIR) \
-	$(VULKAN_DIR) \
 	$(WEBRTCDSP_DIR) \
 	$(TTML_DIR) \
-	$(WEBRTC_DIR)
+	$(WEBRTC_DIR) \
+	$(WPE_DIR)
 
 DIST_SUBDIRS = \
 	assrender \
@@ -524,9 +524,9 @@ DIST_SUBDIRS = \
 	webp \
 	x265 \
 	dtls \
-	vulkan \
 	webrtcdsp \
 	ttml \
-	webrtc
+	webrtc \
+	wpe
 
 include $(top_srcdir)/common/parallel-subdirs.mak

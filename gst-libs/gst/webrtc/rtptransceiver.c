@@ -39,7 +39,7 @@ GST_DEBUG_CATEGORY_STATIC (GST_CAT_DEFAULT);
 G_DEFINE_ABSTRACT_TYPE_WITH_CODE (GstWebRTCRTPTransceiver,
     gst_webrtc_rtp_transceiver, GST_TYPE_OBJECT,
     GST_DEBUG_CATEGORY_INIT (gst_webrtc_rtp_transceiver_debug,
-        "webrtctransceiver", 0, "webrtctransceiver");
+        "webrtcrtptransceiver", 0, "webrtcrtptransceiver");
     );
 
 enum
@@ -60,6 +60,22 @@ enum
 };
 
 //static guint gst_webrtc_rtp_transceiver_signals[LAST_SIGNAL] = { 0 };
+
+void
+gst_webrtc_rtp_transceiver_set_direction (GstWebRTCRTPTransceiver * trans,
+    GstWebRTCRTPTransceiverDirection direction)
+{
+  GstWebRTCRTPTransceiverClass *trans_class;
+
+  GST_OBJECT_LOCK (trans);
+  trans->direction = direction;
+
+  trans_class = GST_WEBRTC_RTP_TRANSCEIVER_GET_CLASS (trans);
+
+  g_assert (trans_class->set_direction);
+  trans_class->set_direction (trans, direction);
+  GST_OBJECT_UNLOCK (trans);
+}
 
 static void
 gst_webrtc_rtp_transceiver_set_property (GObject * object, guint prop_id,

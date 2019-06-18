@@ -44,22 +44,39 @@
 #include "gstmsdkcontextutil.h"
 #include "gstmsdkvpputil.h"
 
+#define EXT_FORMATS     ""
+
 #ifndef _WIN32
 #include "gstmsdkallocator_libva.h"
+#if VA_CHECK_VERSION(1, 4, 1)
+#undef EXT_FORMATS
+#define EXT_FORMATS     ", BGR10A2_LE"
+#endif
 #endif
 
 GST_DEBUG_CATEGORY_EXTERN (gst_msdkvpp_debug);
 #define GST_CAT_DEFAULT gst_msdkvpp_debug
 
+#if (MFX_VERSION >= 1028)
+#define SUPPORTED_SYSTEM_FORMAT \
+    "{ NV12, YV12, I420, YUY2, UYVY, VUYA, BGRA, BGRx, RGB16, P010_10LE }"
+#define SUPPORTED_DMABUF_FORMAT \
+    "{ NV12, BGRA, YUY2, UYVY, VUYA, RGB16, P010_10LE}"
+#else
+#define SUPPORTED_SYSTEM_FORMAT \
+    "{ NV12, YV12, I420, YUY2, UYVY, VUYA, BGRA, BGRx, P010_10LE }"
+#define SUPPORTED_DMABUF_FORMAT \
+    "{ NV12, BGRA, YUY2, UYVY, VUYA, P010_10LE}"
+#endif
+
 static GstStaticPadTemplate gst_msdkvpp_sink_factory =
     GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE
-        ("{ NV12, YV12, I420, YUY2, UYVY, BGRA, BGRx }")
+    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (SUPPORTED_SYSTEM_FORMAT)
         ", " "interlace-mode = (string){ progressive, interleaved, mixed }" ";"
         GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_DMABUF,
-            "{ NV12, BGRA, YUY2}")));
+            SUPPORTED_DMABUF_FORMAT)));
 
 static GstStaticPadTemplate gst_msdkvpp_src_factory =
     GST_STATIC_PAD_TEMPLATE ("src",
@@ -67,8 +84,10 @@ static GstStaticPadTemplate gst_msdkvpp_src_factory =
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE_WITH_FEATURES
         (GST_CAPS_FEATURE_MEMORY_DMABUF,
-            "{ BGRA, YUY2, NV12}") ";"
-        GST_VIDEO_CAPS_MAKE ("{ NV12, YUY2, BGRA, BGRx }") ", "
+            "{ BGRA, YUY2, UYVY, NV12, VUYA, BGRx, P010_10LE" EXT_FORMATS "}")
+        ";"
+        GST_VIDEO_CAPS_MAKE ("{ BGRA, NV12, YUY2, UYVY, VUYA, BGRx, P010_10LE"
+            EXT_FORMATS "}") ", "
         "interlace-mode = (string){ progressive, interleaved, mixed }" ";"));
 
 enum
@@ -304,22 +323,20 @@ error_no_pool:
 error_no_video_info:
   {
     GST_INFO_OBJECT (thiz, "Failed to get Video info from caps");
+    gst_object_unref (pool);
     return NULL;
   }
 error_no_allocator:
   {
     GST_INFO_OBJECT (thiz, "Failed to create allocator");
-    if (pool)
-      gst_object_unref (pool);
+    gst_object_unref (pool);
     return NULL;
   }
 error_pool_config:
   {
     GST_INFO_OBJECT (thiz, "Failed to set config");
-    if (pool)
-      gst_object_unref (pool);
-    if (allocator)
-      gst_object_unref (allocator);
+    gst_object_unref (pool);
+    gst_object_unref (allocator);
     return NULL;
   }
 }
@@ -703,8 +720,10 @@ gst_msdkvpp_transform (GstBaseTransform * trans, GstBuffer * inbuf,
      * is used in MSDK samples
      * #define MSDK_VPP_WAIT_INTERVAL 300000
      */
-    if (sync_point)
-      MFXVideoCORE_SyncOperation (session, sync_point, 300000);
+    if (sync_point &&
+        MFXVideoCORE_SyncOperation (session, sync_point,
+            300000) != MFX_ERR_NONE)
+      GST_WARNING_OBJECT (thiz, "failed to do sync operation");
 
     /* More than one output buffers are generated */
     if (status == MFX_ERR_MORE_SURFACE) {
@@ -904,6 +923,13 @@ gst_msdkvpp_initialize (GstMsdkVPP * thiz)
   GST_OBJECT_LOCK (thiz);
   session = gst_msdk_context_get_session (thiz->context);
 
+  /* Close the current session if the session has been initialized,
+   * otherwise the subsequent function call of MFXVideoVPP_Init() will
+   * fail
+   */
+  if (thiz->initialized)
+    MFXVideoVPP_Close (session);
+
   if (thiz->use_video_memory) {
     gst_msdk_set_frame_allocator (thiz->context);
     thiz->param.IOPattern =
@@ -1031,6 +1057,9 @@ gst_msdkvpp_set_caps (GstBaseTransform * trans, GstCaps * caps,
   if (!gst_video_info_is_equal (&out_info, &thiz->srcpad_info))
     srcpad_info_changed = TRUE;
 
+  if (!sinkpad_info_changed && !srcpad_info_changed && thiz->initialized)
+    return TRUE;
+
   thiz->sinkpad_info = in_info;
   thiz->srcpad_info = out_info;
 #ifndef _WIN32
@@ -1038,9 +1067,6 @@ gst_msdkvpp_set_caps (GstBaseTransform * trans, GstCaps * caps,
 #else
   thiz->use_video_memory = FALSE;
 #endif
-
-  if (!sinkpad_info_changed && !srcpad_info_changed && thiz->initialized)
-    return TRUE;
 
   /* check for deinterlace requirement */
   deinterlace = gst_msdkvpp_is_deinterlace_enabled (thiz, &in_info);

@@ -35,15 +35,11 @@
 #  include <config.h>
 #endif
 
-#ifdef HAVE_MFX_MFXVP9_H
-#  include <mfx/mfxplugin.h>
-#  include <mfx/mfxvp9.h>
-#else
-#  include "mfxplugin.h"
-#  include "mfxvp9.h"
-#endif
+#include <mfxplugin.h>
+#include <mfxvp9.h>
 
 #include "gstmsdkvp9dec.h"
+#include "gstmsdkvideomemory.h"
 
 GST_DEBUG_CATEGORY_EXTERN (gst_msdkvp9dec_debug);
 #define GST_CAT_DEFAULT gst_msdkvp9dec_debug
@@ -52,6 +48,18 @@ static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS ("video/x-vp9")
+    );
+
+static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
+    GST_PAD_SRC,
+    GST_PAD_ALWAYS,
+    GST_STATIC_CAPS ("video/x-raw, "
+        "format = (string) { NV12, P010_10LE }, "
+        "framerate = (fraction) [0, MAX], "
+        "width = (int) [ 1, MAX ], height = (int) [ 1, MAX ],"
+        "interlace-mode = (string) progressive;"
+        GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_DMABUF,
+            "{ NV12, P010_10LE }") ";")
     );
 
 #define gst_msdkvp9dec_parent_class parent_class
@@ -140,6 +148,21 @@ gst_msdkdec_vp9_get_property (GObject * object, guint prop_id, GValue * value,
   GST_OBJECT_UNLOCK (thiz);
 }
 
+static gboolean
+gst_msdkvp9dec_preinit_decoder (GstMsdkDec * decoder)
+{
+  decoder->param.mfx.FrameInfo.Width =
+      GST_ROUND_UP_16 (decoder->param.mfx.FrameInfo.Width);
+  decoder->param.mfx.FrameInfo.Height =
+      GST_ROUND_UP_16 (decoder->param.mfx.FrameInfo.Height);
+
+  decoder->param.mfx.FrameInfo.PicStruct =
+      decoder->param.mfx.FrameInfo.PicStruct ? decoder->param.mfx.
+      FrameInfo.PicStruct : MFX_PICSTRUCT_PROGRESSIVE;
+
+  return TRUE;
+}
+
 static void
 gst_msdkvp9dec_class_init (GstMsdkVP9DecClass * klass)
 {
@@ -155,16 +178,19 @@ gst_msdkvp9dec_class_init (GstMsdkVP9DecClass * klass)
   gobject_class->get_property = gst_msdkdec_vp9_get_property;
 
   decoder_class->configure = GST_DEBUG_FUNCPTR (gst_msdkvp9dec_configure);
+  decoder_class->preinit_decoder =
+      GST_DEBUG_FUNCPTR (gst_msdkvp9dec_preinit_decoder);
 
   gst_element_class_set_static_metadata (element_class,
       "Intel MSDK VP9 decoder",
-      "Codec/Decoder/Video",
+      "Codec/Decoder/Video/Hardware",
       "VP9 video decoder based on Intel Media SDK",
       "Sreerenj Balachandran <sreerenj.balachandran@intel.com>");
 
   gst_msdkdec_prop_install_output_oder_property (gobject_class);
 
   gst_element_class_add_static_pad_template (element_class, &sink_factory);
+  gst_element_class_add_static_pad_template (element_class, &src_factory);
 }
 
 static void

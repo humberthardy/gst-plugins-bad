@@ -34,13 +34,8 @@
 #  include <config.h>
 #endif
 
-#ifdef HAVE_MFX_MFXDEFS_H
-#  include <mfx/mfxplugin.h>
-#  include <mfx/mfxvp8.h>
-#else
-#  include "mfxplugin.h"
-#  include "mfxvp8.h"
-#endif
+#include <mfxplugin.h>
+#include <mfxvp8.h>
 
 #include "gstmsdkvp8dec.h"
 
@@ -137,6 +132,34 @@ gst_msdkdec_vp8_get_property (GObject * object, guint prop_id, GValue * value,
   GST_OBJECT_UNLOCK (thiz);
 }
 
+static gboolean
+gst_msdkvp8dec_preinit_decoder (GstMsdkDec * decoder)
+{
+  decoder->param.mfx.FrameInfo.Width =
+      GST_ROUND_UP_16 (decoder->param.mfx.FrameInfo.Width);
+  decoder->param.mfx.FrameInfo.Height =
+      GST_ROUND_UP_16 (decoder->param.mfx.FrameInfo.Height);
+
+  decoder->param.mfx.FrameInfo.PicStruct =
+      decoder->param.mfx.FrameInfo.PicStruct ? decoder->param.mfx.
+      FrameInfo.PicStruct : MFX_PICSTRUCT_PROGRESSIVE;
+
+  return TRUE;
+}
+
+static gboolean
+gst_msdkvp8dec_postinit_decoder (GstMsdkDec * decoder)
+{
+  /* Force the structure to MFX_PICSTRUCT_PROGRESSIVE if it is unknow to
+   * work-around MSDK issue:
+   * https://github.com/Intel-Media-SDK/MediaSDK/issues/1139
+   */
+  if (decoder->param.mfx.FrameInfo.PicStruct == MFX_PICSTRUCT_UNKNOWN)
+    decoder->param.mfx.FrameInfo.PicStruct = MFX_PICSTRUCT_PROGRESSIVE;
+
+  return TRUE;
+}
+
 static void
 gst_msdkvp8dec_class_init (GstMsdkVP8DecClass * klass)
 {
@@ -152,10 +175,14 @@ gst_msdkvp8dec_class_init (GstMsdkVP8DecClass * klass)
   gobject_class->get_property = gst_msdkdec_vp8_get_property;
 
   decoder_class->configure = GST_DEBUG_FUNCPTR (gst_msdkvp8dec_configure);
+  decoder_class->preinit_decoder =
+      GST_DEBUG_FUNCPTR (gst_msdkvp8dec_preinit_decoder);
+  decoder_class->postinit_decoder =
+      GST_DEBUG_FUNCPTR (gst_msdkvp8dec_postinit_decoder);
 
   gst_element_class_set_static_metadata (element_class,
       "Intel MSDK VP8 decoder",
-      "Codec/Decoder/Video",
+      "Codec/Decoder/Video/Hardware",
       "VP8 video decoder based on Intel Media SDK",
       "Hyunjun Ko <zzoon@igalia.com>");
 
