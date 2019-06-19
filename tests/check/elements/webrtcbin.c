@@ -656,7 +656,7 @@ test_webrtc_wait_for_answer_error_eos (struct test_webrtc *t)
   test_webrtc_wait_for_state_mask (t, states);
 }
 
-#if 0
+
 static void
 test_webrtc_wait_for_ice_gathering_complete (struct test_webrtc *t)
 {
@@ -874,8 +874,7 @@ _check_ice_port_restriction (struct test_webrtc *t, GstElement * element,
     guint mlineindex, gchar * candidate, GstElement * other, gpointer user_data)
 {
   GRegex *regex;
-  GError *error;
-  gchar *canditate_protocol;
+  gchar *candidate_protocol;
   GMatchInfo *match_info;
   gchar *candidate_port;
   gchar *expected_port;
@@ -884,30 +883,35 @@ _check_ice_port_restriction (struct test_webrtc *t, GstElement * element,
   regex =
       g_regex_new
       ("candidate:(\\d) ([1|2]{1}) ([UPDTC]{3}) (\\d+) ([0-9.]+) (\\d+) ", 0, 0,
-      &error);
-  fail_if (error != NULL);
+      NULL);
 
   g_regex_match (regex, candidate, 0, &match_info);
   fail_unless (g_match_info_get_match_count (match_info) == 7);
 
-  canditate_protocol = g_match_info_fetch (match_info, 2);
+  candidate_protocol = g_match_info_fetch (match_info, 2);
   candidate_port = g_match_info_fetch (match_info, 6);
 
   peer_number = t->webrtc1 == element ? "1" : "2";
 
-  expected_port = g_strconcat (peer_number, canditate_protocol, "000", NULL);
-
+  expected_port = g_strconcat (peer_number, candidate_protocol, "000", NULL);
 
   if (g_strcmp0 (candidate_port, "9") != 0) {
     fail_unless (g_strcmp0 (candidate_port, expected_port) == 0);
   }
 
   g_free (expected_port);
+  g_free (candidate_port);
+  g_free (candidate_protocol);
+  g_match_info_free (match_info);
+  g_regex_unref (regex);
+
 }
 
 GST_START_TEST (test_ice_port_restriction)
 {
   struct test_webrtc *t = create_audio_test ();
+  VAL_SDP_INIT (offer, _count_num_sdp_media, GUINT_TO_POINTER (1), NULL);
+  VAL_SDP_INIT (answer, _count_num_sdp_media, GUINT_TO_POINTER (1), NULL);
 
   /*
    *  Ports are defined as follows "{peer}{protocol}000"
@@ -922,19 +926,9 @@ GST_START_TEST (test_ice_port_restriction)
   gst_util_set_object_arg (G_OBJECT (t->webrtc2), "max-rtp-port", "21000");
   gst_util_set_object_arg (G_OBJECT (t->webrtc2), "min-rtcp-port", "22000");
   gst_util_set_object_arg (G_OBJECT (t->webrtc2), "max-rtcp-port", "22000");
-  t->on_negotiation_needed = NULL;
-  t->offer_data = GUINT_TO_POINTER (1);
-  t->on_offer_created = _count_num_sdp_media;
-  t->answer_data = GUINT_TO_POINTER (1);
-  t->on_answer_created = _count_num_sdp_media;
+
   t->on_ice_candidate = _check_ice_port_restriction;
-
-  fail_if (gst_element_set_state (t->webrtc1,
-          GST_STATE_READY) == GST_STATE_CHANGE_FAILURE);
-  fail_if (gst_element_set_state (t->webrtc2,
-          GST_STATE_READY) == GST_STATE_CHANGE_FAILURE);
-
-  test_webrtc_create_offer (t, t->webrtc1);
+  test_validate_sdp (t, &offer, &answer);
 
   test_webrtc_wait_for_ice_gathering_complete (t);
   test_webrtc_free (t);
